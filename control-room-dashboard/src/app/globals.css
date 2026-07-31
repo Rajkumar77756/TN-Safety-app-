@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom Leaflet Map Dark Theme Overrides */
+.leaflet-container {
+  background-color: #1a1a1a !important;
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: rgba(20, 20, 20, 0.95) !important;
+  color: #ededed !important;
+  border: 1px solid #333;
+  backdrop-filter: blur(10px);
+}
+
+.leaflet-popup-content {
+  margin: 15px !important;
+  line-height: 1.5;
+}
+
+.popup-content h3 {
+  margin: 0 0 10px 0;
+  color: #ff4444;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 14px;
+  border-bottom: 1px solid #333;
+  padding-bottom: 5px;
+}
+
+.popup-content p {
+  margin: 5px 0;
+  font-size: 13px;
+}
+
+.status-active {
+  color: #ff4444;
+  font-weight: bold;
+}
+
+.status-flagged {
+  color: #f5a623;
+  font-weight: bold;
+}
+
+.timestamp {
+  color: #888;
+  font-size: 11px !important;
+  margin-top: 10px !important;
+  font-family: var(--font-geist-mono), monospace;
+}

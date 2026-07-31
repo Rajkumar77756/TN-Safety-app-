@@ -1,0 +1,316 @@
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background-color: #0a0a0a;
+  color: #ededed;
+  font-family: var(--font-geist-sans), sans-serif;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background-color: #111;
+  border-bottom: 1px solid #333;
+  height: 60px;
+  flex-shrink: 0;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo h1 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  margin: 0;
+}
+
+.subtitle {
+  color: #888;
+  font-weight: 400;
+}
+
+.pulseDot {
+  width: 10px;
+  height: 10px;
+  background-color: #00ff00;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #00ff00;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.9rem;
+}
+
+.statusOnline {
+  color: #00ff00;
+}
+
+.time {
+  color: #888;
+}
+
+.mapContainer {
+  flex-grow: 1;
+  position: relative;
+  background-color: #1a1a1a;
+}
+
+.mapOverlay {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 1000;
+  background: rgba(17, 17, 17, 0.85);
+  backdrop-filter: blur(10px);
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  border: 1px solid #333;
+  pointer-events: none;
+}
+
+.mapOverlay h2 {
+  font-size: 1rem;
+  margin: 0 0 5px 0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.mapOverlay p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+.sidebar {
+  position: absolute;
+  top: 80px;
+  right: 20px;
+  width: 340px;
+  bottom: 20px;
+  background: rgba(17, 17, 17, 0.9);
+  backdrop-filter: blur(10px);
+  border: 1px solid #333;
+  border-radius: 8px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar h3 {
+  padding: 1rem;
+  margin: 0;
+  border-bottom: 1px solid #333;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.emptyState {
+  flex-grow: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.85rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+/* Instagram-style Queue */
+.queueContainer {
+  flex-grow: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  padding: 12px 15px;
+  border-bottom: 1px solid #222;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.queueItem:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.queueItem.selected {
+  background: rgba(255, 68, 68, 0.1);
+}
+
+.avatarRing {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  padding: 3px;
+  background: #333; /* Default inactive border */
+  margin-right: 15px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activeRing {
+  background: linear-gradient(45deg, #ff4444, #f5a623, #ff4444);
+  background-size: 200% 200%;
+  animation: instagramRing 2s linear infinite;
+}
+
+@keyframes instagramRing {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.avatarInner {
+  width: 100%;
+  height: 100%;
+  background: #111;
+  border-radius: 50%;
+  border: 2px solid #111; /* Provides the gap between ring and image */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.incidentDetails {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.incidentHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.incidentHeader strong {
+  font-size: 0.95rem;
+  color: #ededed;
+}
+
+.queueTime {
+  font-size: 0.75rem;
+  color: #888;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.incidentSub {
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusActiveText {
+  color: #ff4444;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.statusAnsweredText {
+  color: #00ff00;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.flagWarning {
+  color: #f5a623;
+  font-weight: bold;
+}
+
+/* Dispatcher Action Panel */
+.actionPanel {
+  padding: 1.2rem;
+  background: #1a1a1a;
+  border-top: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.actionPanel h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  color: #fff;
+  letter-spacing: 1px;
+}
+
+.infoRow {
+  font-size: 0.85rem;
+  color: #ddd;
+}
+
+.infoRow span {
+  color: #888;
+  display: inline-block;
+  width: 60px;
+}
+
+.notesInput {
+  width: 100%;
+  height: 80px;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 8px;
+  color: #fff;
+  font-family: var(--font-geist-sans), sans-serif;
+  font-size: 0.85rem;
+  resize: none;
+}
+
+.notesInput:focus {
+  outline: none;
+  border-color: #ff4444;
+}
+
+.answerButton {
+  background: #ff4444;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 0.85rem;
+}
+
+.answerButton:hover {
+  background: #e03a3a;
+}
