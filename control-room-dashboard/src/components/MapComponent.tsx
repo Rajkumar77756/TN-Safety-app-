@@ -18,8 +18,15 @@ interface MapProps {
 }
 
 export default function MapComponent({ incidents }: MapProps) {
-  // Default to a central location (e.g., India) if no active incidents
-  const centerPosition: [number, number] = [20.5937, 78.9629];
+  // Center of Tamil Nadu
+  const centerPosition: [number, number] = [11.1271, 78.6569]; 
+  
+  // Strict bounding box for Tamil Nadu to prevent panning away
+  const tamilNaduBounds: L.LatLngBoundsLiteral = [
+    [8.077, 76.230], // Southwest corner
+    [13.493, 80.345] // Northeast corner
+  ];
+
   const activeIncidentList = Object.values(incidents);
   const activeCenter = activeIncidentList.length > 0 
     ? [activeIncidentList[0].lat, activeIncidentList[0].lng] 
@@ -29,9 +36,12 @@ export default function MapComponent({ incidents }: MapProps) {
     <div style={{ height: "100%", width: "100%", position: "relative" }}>
       <MapContainer 
         center={activeCenter as [number, number]} 
-        zoom={activeIncidentList.length > 0 ? 15 : 5} 
+        zoom={activeIncidentList.length > 0 ? 15 : 7} 
+        minZoom={7}
+        maxBounds={tamilNaduBounds}
+        maxBoundsViscosity={1.0}
         style={{ height: "100%", width: "100%" }}
-        zoomControl={false}
+        zoomControl={true}
       >
         {/* Sleek Dark Mode Map Tiles via CartoDB */}
         <TileLayer
