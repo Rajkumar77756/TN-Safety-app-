@@ -13,29 +13,23 @@ dependencies:
   # Core / Crypto
   encrypt: ^5.0.1
   pointycastle: ^3.7.3
-  flutter_secure_storage: ^8.0.0
+  flutter_secure_storage: ^10.3.1
   uuid: ^4.1.0
 
   # Location and Hardware
-  geolocator: ^10.1.0
-  camera: ^0.10.5+2
-  volume_controller: ^2.0.4
+  geolocator: ^14.0.3
+  camera: ^0.12.0+2
+  volume_controller: ^3.6.0
 
   # Tier 1 - Online
-  socket_io_client: ^2.0.1
-  connectivity_plus: ^5.0.1
+  socket_io_client: ^3.1.6
+  connectivity_plus: ^7.3.1
 
   # Tier 2 - SMS
-  telephony: ^0.2.0 # Or custom platform channel for SmsManager.divideMessage
-
-  # Tier 3 - Mesh
-  nearby_connections: ^3.1.2
-  flutter_background_service: ^3.0.0
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^2.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true

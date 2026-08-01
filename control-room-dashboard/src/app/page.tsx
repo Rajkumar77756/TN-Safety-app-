@@ -35,8 +35,12 @@ export default function Home() {
       setTime(new Date().toLocaleTimeString());
     }, 1000);
 
-    // Connect to backend
-    const newSocket = io("http://localhost:4000");
+    // Connect to the public Localtunnel Node.js backend
+    const newSocket = io("https://womensafetybackend.loca.lt", {
+      extraHeaders: {
+        'Bypass-Tunnel-Reminder': 'true'
+      }
+    });
     setSocket(newSocket);
 
     // Listen for new or updated incident locations
