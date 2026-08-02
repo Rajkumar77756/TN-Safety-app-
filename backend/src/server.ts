@@ -179,6 +179,27 @@ app.post('/api/admin/officers/revoke', requireAdmin, async (req, res) => {
   }
 });
 
+app.post('/api/dispatch/incident/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status, notes } = req.body;
+  try {
+    await pool.query(`UPDATE incidents SET status = $1, legal_hold_state = 'RELEASED' WHERE id = $2`, [status, id]);
+    
+    // Broadcast the resolution to the dashboard and patrol officers
+    io.emit('incident_location_updated', {
+      incidentId: id,
+      status: status,
+      notes: notes,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Failed to update incident status', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // --- CIVILIAN PROFILE API ---
 app.post('/api/civilian/profile', async (req, res) => {
   const { phoneNumber, name, age, currentAddress, workplaceDetails, photoBase64 } = req.body;
