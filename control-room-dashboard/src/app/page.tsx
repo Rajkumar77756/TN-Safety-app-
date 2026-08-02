@@ -20,6 +20,14 @@ export interface Incident {
   timestamp: number;
   trustStatus: string;
   status: 'ACTIVE' | 'ANSWERED' | 'CANCELLED_BY_USER';
+  senderProfile?: {
+    phone_number: string;
+    name: string;
+    age?: number | null;
+    current_address?: string | null;
+    workplace_details?: string | null;
+    photo_base64?: string | null;
+  } | null;
 }
 
 const SERVER_URL = "https://tn-safety-app-qq1f.onrender.com";
