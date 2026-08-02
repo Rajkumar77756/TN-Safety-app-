@@ -1,13 +1,32 @@
 import { BleManager } from 'react-native-ble-plx';
 import BLEAdvertiser from 'react-native-ble-advertiser';
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 import { SERVER_URL } from './index';
+import { Buffer } from 'buffer';
 
 // Initialize the BLE PLX Manager for scanning (Relay Mode)
 export const bleManager = new BleManager();
 
 // Unique 128-bit UUID for the Thunai SOS Service
 export const THUNAI_SOS_SERVICE_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
+
+export const requestBluetoothPermissions = async () => {
+  if (Platform.OS === 'android') {
+    if ((Platform.Version as number) >= 31) {
+      const granted = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      ]);
+      return granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED;
+    } else {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    }
+  }
+  return true;
+};
 
 /**
  * START BLE BROADCASTING (VICTIM MODE)
@@ -20,7 +39,7 @@ export const startOfflineSosBroadcast = async (payload: { userId: string, lat: n
     
     // In a real app, encrypt this payload with the backend's Public Key
     // For this pilot, we encode it as a simple base64/JSON string
-    const encodedPayload = btoa(JSON.stringify(payload));
+    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64');
     
     // Set up the BLE Advertiser
     BLEAdvertiser.setCompanyId(0xFFFF); // Use testing company ID

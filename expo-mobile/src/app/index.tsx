@@ -14,7 +14,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { startBackgroundRelayScanner, startOfflineSosBroadcast, stopOfflineSosBroadcast } from './BleManager';
+import { startBackgroundRelayScanner, startOfflineSosBroadcast, stopOfflineSosBroadcast, requestBluetoothPermissions } from './BleManager';
 
 const { width } = Dimensions.get('window');
 export const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
@@ -70,10 +70,18 @@ export default function HomeScreen() {
       setSocket(newSocket);
     };
 
-    initSocket();
+    const setupBle = async () => {
+      const hasPermission = await requestBluetoothPermissions();
+      if (hasPermission) {
+        // Start listening for Mesh SOS broadcasts from victims around you
+        startBackgroundRelayScanner();
+      } else {
+        console.warn('Bluetooth permissions denied, cannot run mesh scanner.');
+      }
+    };
 
-    // Start listening for Mesh SOS broadcasts from victims around you
-    startBackgroundRelayScanner();
+    initSocket();
+    setupBle();
 
     return () => {
       if (newSocket) newSocket.disconnect();
