@@ -14,6 +14,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { startBackgroundRelayScanner, startOfflineSosBroadcast, stopOfflineSosBroadcast } from './BleManager';
 
 const { width } = Dimensions.get('window');
 export const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
@@ -30,6 +31,7 @@ export default function HomeScreen() {
   const [socket, setSocket] = useState<any>(null);
   const [isAlertActive, setIsAlertActive] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [locationSub, setLocationSub] = useState<Location.LocationSubscription | null>(null);
   const [deviceId] = useState(`user_${Math.floor(Math.random() * 10000)}`);
 
   // Contacts State
@@ -69,6 +71,9 @@ export default function HomeScreen() {
     };
 
     initSocket();
+
+    // Start listening for Mesh SOS broadcasts from victims around you
+    startBackgroundRelayScanner();
 
     return () => {
       if (newSocket) newSocket.disconnect();
@@ -155,21 +160,40 @@ export default function HomeScreen() {
       // Silent Haptic Feedback (Two quick pulses)
       Vibration.vibrate([0, 100, 100, 100]);
 
-      let location = await Location.getCurrentPositionAsync({});
+      const phone = await SecureStore.getItemAsync('user_phone');
+      const trustedPhoneNumbers = contacts.map(c => c.phone);
+
+      // Start continuous live tracking
+      const sub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          timeInterval: 5000,
+          distanceInterval: 10,
+        },
+        (newLocation) => {
+          if (socket && socket.connected) {
+            socket.emit('sos-alert', {
+              userId: deviceId,
+              senderPhone: phone || null,
+              trustedContacts: trustedPhoneNumbers,
+              latitude: newLocation.coords.latitude,
+              longitude: newLocation.coords.longitude,
+              timestamp: new Date().toISOString()
+            });
+          } else {
+            // OFFLINE MESH FALLBACK: Broadcast via Bluetooth LE
+            startOfflineSosBroadcast({
+              userId: deviceId,
+              lat: newLocation.coords.latitude,
+              lng: newLocation.coords.longitude,
+              senderPhone: phone || null
+            });
+          }
+        }
+      );
       
-      if (socket) {
-        const phone = await SecureStore.getItemAsync('user_phone');
-        const trustedPhoneNumbers = contacts.map(c => c.phone);
-        
-        socket.emit('sos-alert', {
-          userId: deviceId,
-          senderPhone: phone || null,
-          trustedContacts: trustedPhoneNumbers,
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          timestamp: new Date().toISOString()
-        });
-      }
+      setLocationSub(sub);
+
     } catch (error) {
       console.error('Error fetching location:', error);
       setIsAlertActive(false);
@@ -180,6 +204,15 @@ export default function HomeScreen() {
     if (!isAlertActive) return;
     Vibration.vibrate(100); // Small haptic to confirm disarm
     setIsAlertActive(false);
+    
+    
+    if (locationSub) {
+      locationSub.remove();
+      setLocationSub(null);
+    }
+    
+    stopOfflineSosBroadcast();
+
     if (socket) {
       socket.emit('cancel-sos', { userId: deviceId });
     }

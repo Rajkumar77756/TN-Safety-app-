@@ -239,6 +239,63 @@ app.get('/api/civilian/profile/:phone', async (req, res) => {
   }
 });
 
+// --- MESH NETWORK RELAY API ---
+app.post('/api/mesh/relay', async (req, res) => {
+  const { relayDeviceId, encryptedPayload } = req.body;
+  
+  if (!encryptedPayload) return res.status(400).json({ error: 'Missing encrypted payload' });
+
+  try {
+    // In a production environment, this is where the Cloud Backend uses its Private Key
+    // to decrypt the BLE Manufacturer Data payload that the stranger relayed to us.
+    // For this pilot, we are simulating decryption of the base64 JSON payload.
+    const decodedString = Buffer.from(encryptedPayload, 'base64').toString('utf8');
+    const payload = JSON.parse(decodedString);
+    
+    console.log(`[MESH RELAY] Anonymous Relay ${relayDeviceId} successfully bounced an offline SOS!`);
+    console.log(`[MESH RELAY] Decrypted Victim Data: UUID: ${payload.userId}, Lat: ${payload.lat}, Lng: ${payload.lng}`);
+
+    const incidentId = 'GLOBAL_TEST_INCIDENT';
+
+    // 1. Log the offline incident into the database
+    await pool.query(`
+      INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
+      VALUES ($1, $2, 'AUTO_HELD', NOW() + INTERVAL '48 hours')
+      ON CONFLICT (id) DO NOTHING
+    `, [incidentId, payload.userId]);
+
+    // 2. Fetch the victim's civilian profile
+    let senderProfile = null;
+    if (payload.senderPhone) {
+      const profileResult = await pool.query('SELECT * FROM civilian_profiles WHERE phone_number = $1', [payload.senderPhone]);
+      if (profileResult.rows.length > 0) {
+        senderProfile = profileResult.rows[0];
+      }
+    }
+
+    // 3. Blast the SOS to the Police Dashboard instantly
+    const broadcastPayload = { 
+      deviceUuid: payload.userId, 
+      incidentId: incidentId, 
+      lat: payload.lat, 
+      lng: payload.lng,
+      timestamp: new Date().toISOString(),
+      trustStatus: 'ACTIVE',
+      district: null,
+      senderProfile: senderProfile
+    };
+    
+    // We emit to everyone because the web dashboard listens globally for incident_location_updated
+    io.emit('incident_location_updated', broadcastPayload);
+
+    res.json({ success: true, message: 'Mesh Relay Processed' });
+  } catch (e) {
+    // If decryption fails or payload is malformed, we just drop it to prevent spam
+    console.error('[MESH RELAY] Dropped invalid packet', e);
+    res.status(400).json({ error: 'Invalid packet' });
+  }
+});
+
 // --- PATROL OFFICER API (Signup / Login) ---
 app.post('/api/patrol/login', async (req, res) => {
   const { phoneNumber, badgeNumber } = req.body;
