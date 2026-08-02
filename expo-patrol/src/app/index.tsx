@@ -5,7 +5,7 @@ import { io } from 'socket.io-client';
 import * as Location from 'expo-location';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 
-const SERVER_URL = 'https://tn-safety-app.onrender.com';
+const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
 const { width, height } = Dimensions.get('window');
 
 export default function PatrolScreen() {

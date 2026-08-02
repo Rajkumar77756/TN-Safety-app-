@@ -14,7 +14,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
-const SERVER_URL = 'https://tn-safety-app.onrender.com';
+const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
 
 interface Contact {
   id: string;

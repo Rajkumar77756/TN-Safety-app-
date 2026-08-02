@@ -22,7 +22,7 @@ export interface Incident {
   status: 'ACTIVE' | 'ANSWERED' | 'CANCELLED_BY_USER';
 }
 
-const SERVER_URL = "https://tn-safety-app.onrender.com";
+const SERVER_URL = "https://tn-safety-app-qq1f.onrender.com";
 
 const TAMIL_NADU_DISTRICTS = [
   "Ariyalur", "Chengalpattu", "Chennai", "Coimbatore", "Cuddalore",
