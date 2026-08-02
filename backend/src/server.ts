@@ -81,6 +81,62 @@ app.post('/api/dispatcher/login', loginLimiter, async (req, res) => {
 });
 
 // --- DPDP COMPLIANT DELETION API ---
+
+// --- ADMIN VERIFICATION API ---
+// Middleware to require ADMIN role
+const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token || !process.env.JWT_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role !== 'ADMIN' && decoded.role !== 'DISPATCHER') return res.status(403).json({ error: 'Admin role required' }); // In pilot demo, allowing DISPATCHER to act as admin
+    (req as any).adminId = decoded.dispatcherId;
+    next();
+  } catch (e) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+app.get('/api/admin/officers', requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT id, email, badge_number, status, last_active FROM patrol_officers ORDER BY id DESC`);
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: 'DB Error' });
+  }
+});
+
+app.post('/api/admin/officers/verify', requireAdmin, async (req, res) => {
+  const { officerId } = req.body;
+  const adminId = (req as any).adminId;
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      // 1. Flip status to VERIFIED
+      await client.query(`UPDATE patrol_officers SET status = 'VERIFIED' WHERE id = $1`, [officerId]);
+      
+      // 2. Log to immutable audit trail
+      await client.query(`
+        INSERT INTO admin_audit_logs (admin_id, action, target_officer_id) 
+        VALUES ($1, 'VERIFY_OFFICER', $2)
+      `, [adminId, officerId]);
+
+      await client.query('COMMIT');
+      res.json({ success: true });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('Verification error:', e);
+    res.status(500).json({ error: 'Failed to verify officer' });
+  }
+});
 app.delete('/api/device/:uuid', async (req, res) => {
   const { uuid } = req.params;
   let outcome = 'BLOCKED';
@@ -199,7 +255,7 @@ io.on('connection', (socket) => {
       console.error('Failed to insert AUTO_HELD state (DB might be offline during testing)', e);
     }
     
-    // 1. CRITICAL PATH: Broadcast directly to the dashboard immediately (Zero Latency)
+    // 1. Instantly notify the dashboard (Zero Latency)
     const broadcastPayload = { 
       deviceUuid: payload.userId, 
       incidentId: incidentId, 
@@ -209,11 +265,36 @@ io.on('connection', (socket) => {
       trustStatus: 'ACTIVE',
       district: null // Set to null initially
     };
-    
-    // SECURITY CONSTRAINT: incident_location_updated is one-way
     io.to(incidentId).emit('incident_location_updated', broadcastPayload);
-    
-    // 2. FIRE-AND-FORGET: Async Reverse-Geocoding
+
+    // 2. Dispatch to Patrol Officers (PostGIS spatial query)
+    try {
+      const nearestOfficers = await pool.query(`
+        SELECT id, email, badge_number 
+        FROM patrol_officers 
+        WHERE status = 'VERIFIED' AND is_on_duty = TRUE
+        AND lat IS NOT NULL AND lng IS NOT NULL
+        AND ST_DWithin(
+          ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography, 
+          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 
+          5000 -- 5km radius in meters
+        )
+      `, [payload.longitude, payload.latitude]);
+
+      // Emit strictly minimized payload to nearby officers
+      nearestOfficers.rows.forEach(officer => {
+        io.to(`patrol_${officer.id}`).emit('dispatch_patrol', {
+          incidentId: incidentId,
+          lat: payload.latitude,
+          lng: payload.longitude
+        });
+        console.log(`Dispatched SOS to Officer Badge: ${officer.badge_number}`);
+      });
+    } catch (e) {
+      console.error('Failed to dispatch to patrol officers via PostGIS:', e);
+    }
+
+    // 3. FIRE-AND-FORGET: Async Reverse-Geocoding
     (async () => {
       try {
         const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${payload.latitude}&lon=${payload.longitude}`, {

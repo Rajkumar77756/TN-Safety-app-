@@ -89,17 +89,49 @@ export const initDb = async () => {
       );
     `);
 
-    // False Alarms table for abuse prevention
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS false_alarms (
+    // Core Incidents Schema with Legal Hold
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS incidents (
+        id VARCHAR(255) PRIMARY KEY,
+        device_uuid VARCHAR(255) NOT NULL,
+        district VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'ACTIVE',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        legal_hold_state VARCHAR(50) DEFAULT 'NONE',
+        legal_hold_expires_at TIMESTAMP
+      );
+    `);
+
+    // Enable PostGIS for spatial routing
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS postgis;`);
+
+    // Patrol Officers Schema
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS patrol_officers (
         id SERIAL PRIMARY KEY,
-        device_uuid UUID REFERENCES devices(uuid) ON DELETE CASCADE,
-        incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE,
-        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        email VARCHAR(255) UNIQUE NOT NULL,
+        badge_number VARCHAR(100) UNIQUE NOT NULL,
+        status VARCHAR(50) DEFAULT 'PENDING', -- PENDING, VERIFIED, REJECTED
+        is_on_duty BOOLEAN DEFAULT FALSE,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Admin Audit Logs for verification transparency
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_audit_logs (
+        id SERIAL PRIMARY KEY,
+        admin_id VARCHAR(255) NOT NULL,
+        action VARCHAR(255) NOT NULL,
+        target_officer_id INT REFERENCES patrol_officers(id),
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
     
-    console.log('Database schemas initialized successfully.');
+    console.log('PostgreSQL Database tables verified successfully.');
   } catch (error) {
     console.error('Error initializing database:', error);
   } finally {
