@@ -137,6 +137,77 @@ app.post('/api/admin/officers/verify', requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'Failed to verify officer' });
   }
 });
+app.post('/api/admin/officers/revoke', requireAdmin, async (req, res) => {
+  const { officerId, reason } = req.body;
+  const adminId = (req as any).adminId;
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      await client.query(`UPDATE patrol_officers SET status = 'REVOKED' WHERE id = $1`, [officerId]);
+      
+      await client.query(`
+        INSERT INTO admin_audit_logs (admin_id, action, target_officer_id) 
+        VALUES ($1, $2, $3)
+      `, [adminId, `REVOKE_OFFICER: ${reason || 'No reason provided'}`, officerId]);
+
+      await client.query('COMMIT');
+      res.json({ success: true });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to revoke officer' });
+  }
+});
+
+// --- PATROL OFFICER API (Signup / Login) ---
+app.post('/api/patrol/login', async (req, res) => {
+  const { email, badgeNumber } = req.body;
+  
+  if (!email || !email.endsWith('@tnpolice.gov.in')) {
+    return res.status(403).json({ error: 'Must use official @tnpolice.gov.in email' });
+  }
+
+  try {
+    // Upsert the officer into the DB
+    let result = await pool.query(`SELECT id, status FROM patrol_officers WHERE email = $1`, [email]);
+    let officerId;
+    let status;
+
+    if (result.rows.length === 0) {
+      // New signup
+      const insert = await pool.query(`
+        INSERT INTO patrol_officers (email, badge_number, email_verified, status)
+        VALUES ($1, $2, TRUE, 'PENDING') -- Simulated OTP success
+        RETURNING id, status
+      `, [email, badgeNumber]);
+      officerId = insert.rows[0].id;
+      status = insert.rows[0].status;
+    } else {
+      officerId = result.rows[0].id;
+      status = result.rows[0].status;
+    }
+
+    // Issue JWT
+    const token = jwt.sign(
+      { patrolId: officerId, role: 'PATROL' }, 
+      process.env.JWT_SECRET as string, 
+      { expiresIn: '24h' }
+    );
+
+    res.json({ token, status, officerId });
+  } catch (e) {
+    console.error('Patrol login error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.delete('/api/device/:uuid', async (req, res) => {
   const { uuid } = req.params;
   let outcome = 'BLOCKED';
@@ -186,16 +257,27 @@ app.delete('/api/device/:uuid', async (req, res) => {
 
 // --- SOCKET.IO AUTHENTICATION MIDDLEWARE ---
 // NEVER trust a client-asserted role. Validate via JWT.
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   // We allow unauthenticated devices to connect (they only emit sos-alert)
-  // But dispatchers MUST provide a token to join rooms
+  // But dispatchers and patrol MUST provide a token to join rooms
   const token = socket.handshake.auth?.token;
   
   if (token) {
     if (!process.env.JWT_SECRET) return next(new Error('Server misconfiguration: missing JWT_SECRET'));
     try {
       const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
-      socket.data.dispatcherId = decoded.dispatcherId;
+      
+      if (decoded.role === 'PATROL') {
+        // Enforce strict server-side Verification Check
+        const result = await pool.query(`SELECT status FROM patrol_officers WHERE id = $1`, [decoded.patrolId]);
+        if (result.rows.length === 0 || result.rows[0].status !== 'VERIFIED') {
+          return next(new Error("unauthorized_patrol"));
+        }
+        socket.data.patrolId = decoded.patrolId;
+      } else {
+        socket.data.dispatcherId = decoded.dispatcherId;
+      }
+      
       socket.data.role = decoded.role; // Securely set by server
     } catch {
       return next(new Error("unauthorized")); // Tampered/Expired token

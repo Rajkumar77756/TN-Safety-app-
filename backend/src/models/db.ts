@@ -112,7 +112,8 @@ export const initDb = async () => {
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
         badge_number VARCHAR(100) UNIQUE NOT NULL,
-        status VARCHAR(50) DEFAULT 'PENDING', -- PENDING, VERIFIED, REJECTED
+        status VARCHAR(50) DEFAULT 'PENDING', -- PENDING, VERIFIED, REJECTED, REVOKED
+        email_verified BOOLEAN DEFAULT FALSE,
         is_on_duty BOOLEAN DEFAULT FALSE,
         lat DOUBLE PRECISION,
         lng DOUBLE PRECISION,

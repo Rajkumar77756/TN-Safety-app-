@@ -3,7 +3,7 @@ import { StyleSheet, View, Text, TouchableOpacity, ScrollView, Image, Dimensions
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle, 
@@ -27,6 +27,7 @@ export default function HomeScreen() {
   const [socket, setSocket] = useState<any>(null);
   const [isAlertActive, setIsAlertActive] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [deviceId] = useState(`user_${Math.floor(Math.random() * 10000)}`);
 
   // Contacts State
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -55,7 +56,7 @@ export default function HomeScreen() {
 
   const loadContacts = async () => {
     try {
-      const savedContacts = await AsyncStorage.getItem('@trusted_contacts');
+      const savedContacts = await SecureStore.getItemAsync('trusted_contacts');
       if (savedContacts) {
         setContacts(JSON.parse(savedContacts));
       }
@@ -76,7 +77,7 @@ export default function HomeScreen() {
 
     const updatedContacts = [...contacts, newContact];
     try {
-      await AsyncStorage.setItem('@trusted_contacts', JSON.stringify(updatedContacts));
+      await SecureStore.setItemAsync('trusted_contacts', JSON.stringify(updatedContacts));
       setContacts(updatedContacts);
       setIsModalVisible(false);
       setNewName('');
@@ -136,7 +137,7 @@ export default function HomeScreen() {
       
       if (socket) {
         socket.emit('sos-alert', {
-          userId: 'user_123',
+          userId: deviceId,
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
           timestamp: new Date().toISOString()
@@ -153,7 +154,7 @@ export default function HomeScreen() {
     Vibration.vibrate(100); // Small haptic to confirm disarm
     setIsAlertActive(false);
     if (socket) {
-      socket.emit('cancel-sos', { userId: 'user_123' });
+      socket.emit('cancel-sos', { userId: deviceId });
     }
   };
 

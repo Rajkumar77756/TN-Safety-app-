@@ -108,6 +108,30 @@ export default function Home() {
     }
   };
 
+  const revokeOfficer = async (officerId: number) => {
+    const reason = prompt("Enter revocation reason (for audit log):");
+    if (reason === null) return; // Cancelled
+
+    try {
+      const res = await fetch(`${SERVER_URL}/api/admin/officers/revoke`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ officerId, reason })
+      });
+      if (res.ok) {
+        alert("Officer Revoked Successfully.");
+        fetchOfficers();
+      } else {
+        alert("Revocation Failed.");
+      }
+    } catch (e) {
+      alert("Revocation Request Failed.");
+    }
+  };
+
   useEffect(() => {
     if (!token) return;
 
@@ -399,11 +423,18 @@ export default function Home() {
                   <div className={styles.officerInfo}>
                     <strong>Badge: {off.badge_number}</strong>
                     <span>Email: {off.email}</span>
-                    <span>Status: <b style={{ color: off.status === 'VERIFIED' ? '#00ff00' : '#f5a623'}}>{off.status}</b></span>
+                    <span>
+                      Status: <b style={{ color: off.status === 'VERIFIED' ? '#00ff00' : off.status === 'REVOKED' ? '#ff4d4f' : '#f5a623'}}>{off.status}</b>
+                    </span>
                   </div>
                   {off.status === 'PENDING' && (
                     <button className={styles.verifyBtn} onClick={() => verifyOfficer(off.id)}>
                       Approve & Verify
+                    </button>
+                  )}
+                  {off.status === 'VERIFIED' && (
+                    <button className={styles.verifyBtn} style={{ backgroundColor: '#555' }} onClick={() => revokeOfficer(off.id)}>
+                      Revoke
                     </button>
                   )}
                 </div>
