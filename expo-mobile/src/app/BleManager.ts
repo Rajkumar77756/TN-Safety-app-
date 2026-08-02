@@ -62,6 +62,12 @@ function encodeSosPayload(userId: string, lat: number, lng: number): number[] {
  */
 export const startOfflineSosBroadcast = async (payload: { userId: string, lat: number, lng: number, senderPhone: string | null }) => {
   try {
+    const hasPermission = await requestBluetoothPermissions();
+    if (!hasPermission) {
+      console.warn('[BLE] Advertise permission denied. Cannot broadcast offline SOS.');
+      return;
+    }
+
     console.log('[BLE] Starting Offline SOS Broadcast...');
     
     // Encode the victim's critical data into a 16-byte binary payload
@@ -100,17 +106,18 @@ export const stopOfflineSosBroadcast = async () => {
  * If it hears one, it uses the relay phone's internet to send it to the police.
  */
 export const startBackgroundRelayScanner = () => {
-  console.log('[BLE] Starting Background Relay Scanner...');
-  
-  if (!bleManager) {
-    bleManager = new BleManager();
-  }
-  
-  bleManager.startDeviceScan([THUNAI_SOS_SERVICE_UUID], { allowDuplicates: false }, async (error, device) => {
-    if (error) {
-      console.error('[BLE] Scan error', error);
-      return;
+  try {
+    console.log('[BLE] Starting Background Relay Scanner...');
+    
+    if (!bleManager) {
+      bleManager = new BleManager();
     }
+    
+    bleManager.startDeviceScan([THUNAI_SOS_SERVICE_UUID], { allowDuplicates: false }, async (error, device) => {
+      if (error) {
+        console.error('[BLE] Scan error', error);
+        return;
+      }
 
     if (device) {
       console.log(`[BLE] Detected SOS Signal from Device ID: ${device.id}`);
@@ -140,4 +147,8 @@ export const startBackgroundRelayScanner = () => {
       setTimeout(() => startBackgroundRelayScanner(), 10000);
     }
   });
+  } catch (err) {
+    console.error('[BLE] Native Module Crash: Failed to start relay scanner', err);
+    // Graceful failure - disable mesh for this session instead of crashing
+  }
 };
