@@ -179,6 +179,45 @@ app.post('/api/admin/officers/revoke', requireAdmin, async (req, res) => {
   }
 });
 
+// --- CIVILIAN PROFILE API ---
+app.post('/api/civilian/profile', async (req, res) => {
+  const { phoneNumber, name, age, currentAddress, workplaceDetails, photoBase64 } = req.body;
+  
+  if (!phoneNumber || !name) {
+    return res.status(400).json({ error: 'Phone number and name are required' });
+  }
+
+  try {
+    await pool.query(`
+      INSERT INTO civilian_profiles (phone_number, name, age, current_address, workplace_details, photo_base64, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      ON CONFLICT (phone_number) 
+      DO UPDATE SET 
+        name = EXCLUDED.name,
+        age = EXCLUDED.age,
+        current_address = EXCLUDED.current_address,
+        workplace_details = EXCLUDED.workplace_details,
+        photo_base64 = EXCLUDED.photo_base64,
+        updated_at = CURRENT_TIMESTAMP
+    `, [phoneNumber, name, age || null, currentAddress || null, workplaceDetails || null, photoBase64 || null]);
+    
+    res.json({ success: true });
+  } catch (e) {
+    console.error('Failed to save civilian profile', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/civilian/profile/:phone', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM civilian_profiles WHERE phone_number = $1', [req.params.phone]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
+    res.json(result.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // --- PATROL OFFICER API (Signup / Login) ---
 app.post('/api/patrol/login', async (req, res) => {
   const { phoneNumber, badgeNumber } = req.body;
@@ -274,6 +313,13 @@ io.use(async (socket, next) => {
   // We allow unauthenticated devices to connect (they only emit sos-alert)
   // But dispatchers and patrol MUST provide a token to join rooms
   const token = socket.handshake.auth?.token;
+  const civilianPhone = socket.handshake.auth?.civilianPhone;
+  
+  if (civilianPhone) {
+    socket.data.role = 'CIVILIAN';
+    socket.data.phone = civilianPhone;
+    socket.join(`civilian_${civilianPhone}`);
+  }
   
   if (token) {
     if (!process.env.JWT_SECRET) return next(new Error('Server misconfiguration: missing JWT_SECRET'));
@@ -420,6 +466,36 @@ io.on('connection', (socket) => {
       }
     } catch (e) {
       console.error('Failed to dispatch to patrol officers via PostGIS:', e);
+    }
+
+    // 2.5. Dispatch to Civilian Trusted Contacts (Peer-to-Peer Routing)
+    try {
+      if (payload.trustedContacts && Array.isArray(payload.trustedContacts)) {
+        // Fetch the sender's civilian profile to send along with the alert
+        let senderProfile = null;
+        if (payload.senderPhone) {
+          const profileResult = await pool.query('SELECT * FROM civilian_profiles WHERE phone_number = $1', [payload.senderPhone]);
+          if (profileResult.rows.length > 0) {
+            senderProfile = profileResult.rows[0];
+          }
+        }
+
+        const civilianPayload = {
+          incidentId: incidentId,
+          lat: payload.latitude,
+          lng: payload.longitude,
+          timestamp: payload.timestamp || new Date().toISOString(),
+          senderProfile: senderProfile
+        };
+
+        for (const phone of payload.trustedContacts) {
+          // Emit to the specific civilian socket room
+          io.to(`civilian_${phone}`).emit('trusted_sos_alert', civilianPayload);
+          console.log(`Routed SOS to Trusted Civilian Contact: ${phone}`);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to dispatch to trusted civilian contacts:', e);
     }
 
     // 3. FIRE-AND-FORGET: Async Reverse-Geocoding

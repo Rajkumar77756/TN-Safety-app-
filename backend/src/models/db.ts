@@ -97,7 +97,20 @@ export const initDb = async () => {
     `);
 
     // Core Incidents Schema with Legal Hold
-    await pool.query(`
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS civilian_profiles (
+        phone_number VARCHAR(20) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        age INTEGER,
+        current_address TEXT,
+        workplace_details TEXT,
+        photo_base64 TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS incidents (
         id VARCHAR(255) PRIMARY KEY,
         device_uuid VARCHAR(255) NOT NULL,

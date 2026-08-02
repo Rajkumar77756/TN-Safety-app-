@@ -12,6 +12,8 @@ import Animated, {
   withSequence,
   Easing 
 } from 'react-native-reanimated';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width } = Dimensions.get('window');
 const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
@@ -24,6 +26,7 @@ interface Contact {
 }
 
 export default function HomeScreen() {
+  const router = useRouter();
   const [socket, setSocket] = useState<any>(null);
   const [isAlertActive, setIsAlertActive] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
@@ -40,18 +43,37 @@ export default function HomeScreen() {
   const pulseOpacity = useSharedValue(0.5);
   const buttonScale = useSharedValue(1);
 
+  const [incomingSOS, setIncomingSOS] = useState<any>(null);
+
   useEffect(() => {
-    loadContacts();
+    let newSocket: any;
+    const initSocket = async () => {
+      await loadContacts();
+      const phone = await SecureStore.getItemAsync('user_phone');
+      
+      newSocket = io(SERVER_URL, {
+        extraHeaders: { 'Bypass-Tunnel-Reminder': 'true' },
+        auth: phone ? { civilianPhone: phone } : {}
+      });
+      
+      newSocket.on('connect', () => console.log('Connected to server'));
+      
+      // Peer-to-Peer SOS Alert Listener
+      newSocket.on('trusted_sos_alert', (payload: any) => {
+        setIncomingSOS(payload);
+        // High intensity haptic vibration to wake user
+        Vibration.vibrate([0, 500, 200, 500, 200, 500], true);
+      });
 
-    // Connect to Socket.io backend
-    const newSocket = io(SERVER_URL, {
-      extraHeaders: { 'Bypass-Tunnel-Reminder': 'true' }
-    });
-    
-    newSocket.on('connect', () => console.log('Connected to server'));
-    setSocket(newSocket);
+      setSocket(newSocket);
+    };
 
-    return () => newSocket.disconnect();
+    initSocket();
+
+    return () => {
+      if (newSocket) newSocket.disconnect();
+      Vibration.cancel();
+    };
   }, []);
 
   const loadContacts = async () => {
@@ -136,8 +158,13 @@ export default function HomeScreen() {
       let location = await Location.getCurrentPositionAsync({});
       
       if (socket) {
+        const phone = await SecureStore.getItemAsync('user_phone');
+        const trustedPhoneNumbers = contacts.map(c => c.phone);
+        
         socket.emit('sos-alert', {
           userId: deviceId,
+          senderPhone: phone || null,
+          trustedContacts: trustedPhoneNumbers,
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
           timestamp: new Date().toISOString()
@@ -163,6 +190,9 @@ export default function HomeScreen() {
       {/* Top Header */}
         <View style={styles.header}>
           <Text style={styles.logoText}>Thunai</Text>
+          <TouchableOpacity onPress={() => router.push('/profile')}>
+            <Ionicons name="person-circle-outline" size={32} color="#fff" />
+          </TouchableOpacity>
         </View>
 
       {/* Instagram-style "Stories" Row (Trusted Contacts) */}
@@ -254,6 +284,33 @@ export default function HomeScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* PEER TO PEER SOS ALERT MODAL */}
+      <Modal visible={!!incomingSOS} animationType="slide" transparent={false}>
+        <View style={styles.sosAlertModal}>
+          <Text style={styles.sosAlertTitle}>🚨 EMERGENCY SOS 🚨</Text>
+          <Text style={styles.sosAlertSubtitle}>A trusted contact is in danger!</Text>
+          
+          {incomingSOS?.senderProfile && (
+            <View style={styles.sosAlertProfile}>
+              {incomingSOS.senderProfile.photo_base64 ? (
+                <Image source={{ uri: incomingSOS.senderProfile.photo_base64 }} style={styles.sosAlertImage} />
+              ) : (
+                <View style={[styles.sosAlertImage, { backgroundColor: '#333', justifyContent: 'center', alignItems: 'center' }]}>
+                  <Ionicons name="person" size={50} color="#666" />
+                </View>
+              )}
+              <Text style={styles.sosAlertName}>{incomingSOS.senderProfile.name}</Text>
+              <Text style={styles.sosAlertPhone}>{incomingSOS.senderProfile.phone_number}</Text>
+            </View>
+          )}
+
+          <TouchableOpacity style={styles.sosAlertDismiss} onPress={() => { Vibration.cancel(); setIncomingSOS(null); }}>
+            <Text style={styles.sosAlertDismissText}>I AM RESPONDING</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -435,6 +492,62 @@ const styles = StyleSheet.create({
   },
   saveBtnText: {
     color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+  sosAlertModal: {
+    flex: 1,
+    backgroundColor: '#ff0000',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  sosAlertTitle: {
+    color: '#fff',
+    fontSize: 32,
+    fontWeight: '900',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  sosAlertSubtitle: {
+    color: '#fff',
+    fontSize: 18,
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  sosAlertProfile: {
+    alignItems: 'center',
+    marginBottom: 50,
+  },
+  sosAlertImage: {
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    borderWidth: 4,
+    borderColor: '#fff',
+    marginBottom: 20,
+  },
+  sosAlertName: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: 'bold',
+  },
+  sosAlertPhone: {
+    color: '#fff',
+    fontSize: 18,
+    marginTop: 5,
+    opacity: 0.9,
+  },
+  sosAlertDismiss: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 40,
+    paddingVertical: 20,
+    borderRadius: 30,
+    position: 'absolute',
+    bottom: 50,
+  },
+  sosAlertDismissText: {
+    color: '#ff0000',
+    fontSize: 20,
     fontWeight: 'bold',
   }
 });
