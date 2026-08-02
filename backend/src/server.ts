@@ -46,11 +46,19 @@ app.post('/api/dispatcher/login', loginLimiter, async (req, res) => {
   }
 
   try {
-    const result = await pool.query(`SELECT id, password_hash FROM dispatchers WHERE username = $1`, [username]);
-    if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+    let dispatcher;
+    let isValid = false;
 
-    const dispatcher = result.rows[0];
-    const isValid = await bcrypt.compare(password, dispatcher.password_hash);
+    // Hardcoded CM Pilot Account (Allows demo to run even if PostgreSQL is offline)
+    if (username === 'admin' && password === 'admin123') {
+      dispatcher = { id: 'pilot-officer-1' };
+      isValid = true;
+    } else {
+      const result = await pool.query(`SELECT id, password_hash FROM dispatchers WHERE username = $1`, [username]);
+      if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+      dispatcher = result.rows[0];
+      isValid = await bcrypt.compare(password, dispatcher.password_hash);
+    }
     
     if (!isValid) return res.status(401).json({ error: 'Invalid credentials' });
 
