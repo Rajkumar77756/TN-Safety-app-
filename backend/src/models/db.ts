@@ -4,13 +4,20 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Standard PostgreSQL pool for geospatial incident tracking using PostGIS
-export const pool = new Pool({
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'postgres', // Changed to 'postgres' default for local Docker testing
-  password: process.env.DB_PASSWORD || 'password',
-  port: parseInt(process.env.DB_PORT || '5432', 10),
-});
+const poolConfig: any = process.env.DATABASE_URL
+  ? {
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false } // Required for Supabase/Render
+    }
+  : {
+      user: process.env.DB_USER || 'postgres',
+      host: process.env.DB_HOST || 'localhost',
+      database: process.env.DB_NAME || 'postgres',
+      password: process.env.DB_PASSWORD || 'password',
+      port: parseInt(process.env.DB_PORT || '5432', 10),
+    };
+
+export const pool = new Pool(poolConfig);
 
 // Initialize tables if they don't exist
 export const initDb = async () => {
