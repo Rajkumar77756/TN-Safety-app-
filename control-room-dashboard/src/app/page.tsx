@@ -359,29 +359,42 @@ export default function Home() {
                     className={`${styles.incidentCard} ${selectedIncidentId === incident.incidentId ? styles.selectedCard : ''}`}
                     onClick={() => setSelectedIncidentId(incident.incidentId)}
                   >
-                    <div className={styles.cardHeader}>
-                      <div className={`${styles.urgencyBadge} ${incident.status !== 'ACTIVE' ? styles.urgencyBadgeAnswered : ''}`}>
-                        {incident.trustStatus === 'NEEDS_REVIEW' ? 'FLAG' : 'SOS'}
-                      </div>
-                      <div className={styles.incidentHeader}>
-                        <strong>ID: {incident.deviceUuid.substring(0,8)}</strong>
-                        <span className={styles.queueTime}>{new Date(incident.timestamp).toLocaleTimeString()}</span>
-                      </div>
-                      <div className={styles.incidentSub}>
-                        <span style={{
-                          color: incident.status === 'ACTIVE' ? '#ff4d4f' : 
-                                 incident.status === 'CANCELLED_BY_USER' ? '#555555' : '#00ff00',
-                          fontWeight: 'bold',
-                          fontSize: '0.8rem'
-                        }}>
-                          {incident.status === 'CANCELLED_BY_USER' ? 'OFFLINE (DISARMED)' : incident.status}
-                        </span>
-                        {incident.district && (
-                          <span style={{ color: '#aaa', marginLeft: '0.5rem', fontSize: '0.75rem' }}> • {incident.district}</span>
-                        )}
-                        {incident.trustStatus === 'NEEDS_REVIEW' && incident.status === 'ACTIVE' && (
-                          <span className={styles.flagWarning}> • FLAGGED</span>
-                        )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                      {/* Avatar Side */}
+                      {incident.senderProfile && incident.senderProfile.photo_base64 ? (
+                        <div style={{ position: 'relative' }}>
+                          <img src={incident.senderProfile.photo_base64} style={{ width: '50px', height: '50px', borderRadius: '25px', objectFit: 'cover', border: incident.status === 'ACTIVE' ? '2px solid #ff4d4f' : '2px solid #555' }} />
+                          {incident.status === 'ACTIVE' && (
+                            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 12, height: 12, backgroundColor: '#ff4d4f', borderRadius: 6, border: '2px solid #1a1a1a' }} />
+                          )}
+                        </div>
+                      ) : (
+                        <div className={`${styles.urgencyBadge} ${incident.status !== 'ACTIVE' ? styles.urgencyBadgeAnswered : ''}`} style={{ flexShrink: 0 }}>
+                          {incident.trustStatus === 'NEEDS_REVIEW' ? 'FLAG' : 'SOS'}
+                        </div>
+                      )}
+                      
+                      {/* Details Side */}
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <strong style={{ fontSize: '14px', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {incident.senderProfile ? incident.senderProfile.name : `ID: ${incident.deviceUuid.substring(0,8)}`}
+                          </strong>
+                          <span className={styles.queueTime}>{new Date(incident.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                        <div className={styles.incidentSub}>
+                          <span style={{
+                            color: incident.status === 'ACTIVE' ? '#ff4d4f' : 
+                                   incident.status === 'CANCELLED_BY_USER' ? '#555555' : '#00ff00',
+                            fontWeight: 'bold',
+                            fontSize: '0.8rem'
+                          }}>
+                            {incident.status === 'CANCELLED_BY_USER' ? 'OFFLINE (DISARMED)' : incident.status}
+                          </span>
+                          {incident.district && (
+                            <span style={{ color: '#aaa', marginLeft: '0.5rem', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}> • {incident.district}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -391,7 +404,13 @@ export default function Home() {
               {/* Action Panel for answering the selected incident */}
               {selectedIncident && (selectedIncident.status === 'ACTIVE' || selectedIncident.status === 'CANCELLED_BY_USER') && (
                 <div className={styles.actionPanel}>
-                  <h4>{selectedIncident.status === 'CANCELLED_BY_USER' ? "Log False Alarm" : "Take Information"}</h4>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <h4 style={{ margin: 0 }}>{selectedIncident.status === 'CANCELLED_BY_USER' ? "Log False Alarm" : "Take Information"}</h4>
+                    <button 
+                      onClick={() => setSelectedIncidentId(null)} 
+                      style={{ background: 'transparent', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer', padding: '0 5px' }}
+                    >×</button>
+                  </div>
                   <div className={styles.infoRow}>
                     <span>Device:</span> {selectedIncident.deviceUuid.substring(0,8)}
                   </div>
