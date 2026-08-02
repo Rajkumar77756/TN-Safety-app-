@@ -117,7 +117,8 @@ export default function Home() {
           [payload.incidentId]: { ...prev[payload.incidentId], status: payload.status },
         };
       });
-      if (payload.status === 'ANSWERED' || payload.status === 'CANCELLED_BY_USER') {
+      // Only auto-deselect if it was fully archived/answered by a dispatcher
+      if (payload.status === 'ANSWERED') {
         setSelectedIncidentId(null);
       }
     });
@@ -292,9 +293,9 @@ export default function Home() {
         )}
         
         {/* Action Panel for answering the selected incident */}
-        {selectedIncident && selectedIncident.status === 'ACTIVE' && (
+        {selectedIncident && (selectedIncident.status === 'ACTIVE' || selectedIncident.status === 'CANCELLED_BY_USER') && (
           <div className={styles.actionPanel}>
-            <h4>Take Information</h4>
+            <h4>{selectedIncident.status === 'CANCELLED_BY_USER' ? "Log False Alarm" : "Take Information"}</h4>
             <div className={styles.infoRow}>
               <span>Device:</span> {selectedIncident.deviceUuid.substring(0,8)}
             </div>
@@ -306,15 +307,16 @@ export default function Home() {
             </div>
             <textarea 
               className={styles.notesInput}
-              placeholder="Dispatcher notes (e.g., dispatching patrol unit 4)..."
+              placeholder="Dispatcher notes (e.g., false alarm logged)..."
               value={dispatcherNotes}
               onChange={(e) => setDispatcherNotes(e.target.value)}
             />
             <button 
               className={styles.answerButton}
+              style={{ backgroundColor: selectedIncident.status === 'CANCELLED_BY_USER' ? '#555' : '#ff4d4f' }}
               onClick={() => handleAnswerIncident(selectedIncident.incidentId)}
             >
-              Mark as Answered
+              {selectedIncident.status === 'CANCELLED_BY_USER' ? "Archive Incident" : "Mark as Answered"}
             </button>
           </div>
         )}
