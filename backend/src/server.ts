@@ -490,6 +490,10 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 4001;
 httpServer.listen(PORT, async () => {
   console.log(`Backend server listening on port ${PORT}`);
-  // DB init bypassed for local tunnel testing
-  // await initDb();
+  // DB init re-enabled to run schema migrations automatically
+  try {
+    await initDb();
+  } catch (e) {
+    console.error('Failed to init DB schemas:', e);
+  }
 });
