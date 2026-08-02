@@ -415,7 +415,7 @@ export default function Home() {
           <div className={styles.officerContainer}>
             <div className={styles.officerHeader}>
               <h2>Patrol Officer Verification</h2>
-              <p>Cross-check badge numbers against the registry before approving access to the live dispatch stream.</p>
+              <p>Cross-check the exact phone-to-badge pairing against the state registry before approving access to the live dispatch stream.</p>
             </div>
             <div className={styles.officerList}>
               {officers.map(off => (

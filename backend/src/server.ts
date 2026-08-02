@@ -38,6 +38,9 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts. Please try again later.' }
 });
 
+// --- MULTI-SESSION SOCKET TRACKING ---
+const activePatrolSockets = new Map<number, Set<any>>();
+
 // --- DISPATCHER AUTHENTICATION ---
 app.post('/api/dispatcher/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
@@ -99,7 +102,7 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
 
 app.get('/api/admin/officers', requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, email, badge_number, status, last_active FROM patrol_officers ORDER BY id DESC`);
+    const result = await pool.query(`SELECT id, phone_number as email, badge_number, status, last_active, phone_number FROM patrol_officers ORDER BY id DESC`);
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: 'DB Error' });
@@ -154,6 +157,16 @@ app.post('/api/admin/officers/revoke', requireAdmin, async (req, res) => {
       `, [adminId, `REVOKE_OFFICER: ${reason || 'No reason provided'}`, officerId]);
 
       await client.query('COMMIT');
+      
+      // Real-time Revocation: Disconnect all active sessions for this officer
+      const officerSockets = activePatrolSockets.get(officerId);
+      if (officerSockets) {
+        for (const sock of officerSockets) {
+          try { sock.disconnect(true); } catch (err) {}
+        }
+        activePatrolSockets.delete(officerId);
+      }
+
       res.json({ success: true });
     } catch (e) {
       await client.query('ROLLBACK');
@@ -292,6 +305,32 @@ io.use(async (socket, next) => {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
+  // Track Multi-session Active Patrol Sockets
+  if (socket.data.role === 'PATROL' && socket.data.patrolId) {
+    const pId = socket.data.patrolId;
+    if (!activePatrolSockets.has(pId)) {
+      activePatrolSockets.set(pId, new Set());
+    }
+    activePatrolSockets.get(pId)!.add(socket);
+  }
+
+  // Handle Patrol Location Pings (Overwrite-in-place + Geography update)
+  socket.on('patrol_location_update', async (payload) => {
+    if (socket.data.role !== 'PATROL' || !socket.data.patrolId) return;
+    try {
+      await pool.query(`
+        UPDATE patrol_officers 
+        SET lat = $1, lng = $2, 
+            location = ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography,
+            is_on_duty = TRUE,
+            last_active = CURRENT_TIMESTAMP
+        WHERE id = $3
+      `, [payload.lat, payload.lng, socket.data.patrolId]);
+    } catch (e) {
+      console.error('Failed to update patrol location', e);
+    }
+  });
+
   // Dispatcher joins incident room to listen
   socket.on('join_incident', async (payload) => {
     const { incidentId } = payload;
@@ -349,29 +388,36 @@ io.on('connection', (socket) => {
     };
     io.to(incidentId).emit('incident_location_updated', broadcastPayload);
 
-    // 2. Dispatch to Patrol Officers (PostGIS spatial query)
+    // 2. Dispatch to Patrol Officers (PostGIS spatial query via GiST Indexed Column)
     try {
       const nearestOfficers = await pool.query(`
-        SELECT id, email, badge_number 
+        SELECT id, phone_number as email, badge_number 
         FROM patrol_officers 
         WHERE status = 'VERIFIED' AND is_on_duty = TRUE
-        AND lat IS NOT NULL AND lng IS NOT NULL
+        AND location IS NOT NULL
         AND ST_DWithin(
-          ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography, 
+          location, 
           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 
           5000 -- 5km radius in meters
         )
       `, [payload.longitude, payload.latitude]);
 
-      // Emit strictly minimized payload to nearby officers
-      nearestOfficers.rows.forEach(officer => {
+      // Emit strictly minimized payload to nearby officers and log dispatch
+      for (const officer of nearestOfficers.rows) {
         io.to(`patrol_${officer.id}`).emit('dispatch_patrol', {
           incidentId: incidentId,
           lat: payload.latitude,
           lng: payload.longitude
         });
+        
+        // DPDP COMPLIANCE: Record dispatch event with lifecycle tied to incident
+        await pool.query(`
+          INSERT INTO dispatch_log (officer_id, incident_id)
+          VALUES ($1, $2)
+        `, [officer.id, incidentId]);
+
         console.log(`Dispatched SOS to Officer Badge: ${officer.badge_number}`);
-      });
+      }
     } catch (e) {
       console.error('Failed to dispatch to patrol officers via PostGIS:', e);
     }
@@ -430,6 +476,14 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
+    // Remove from active map tracking
+    if (socket.data.role === 'PATROL' && socket.data.patrolId) {
+      const pSet = activePatrolSockets.get(socket.data.patrolId);
+      if (pSet) {
+        pSet.delete(socket);
+        if (pSet.size === 0) activePatrolSockets.delete(socket.data.patrolId);
+      }
+    }
   });
 });
 

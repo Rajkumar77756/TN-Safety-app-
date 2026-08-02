@@ -131,13 +131,31 @@ export const initDb = async () => {
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Dispatch Log for Audit & Legal Hold retention
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dispatch_log (
+        id SERIAL PRIMARY KEY,
+        officer_id INT REFERENCES patrol_officers(id),
+        incident_id VARCHAR(255) REFERENCES incidents(id),
+        notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        arrived_at TIMESTAMP
+      );
+    `);
     
-    // Automatic Migration: Change email to phone_number if it exists
+    // Automatic Migrations
     try {
       await pool.query(`ALTER TABLE patrol_officers RENAME COLUMN email TO phone_number;`);
       await pool.query(`ALTER TABLE patrol_officers RENAME COLUMN email_verified TO phone_verified;`);
     } catch (e) {
-      // Ignore error if column already renamed or table didn't exist prior to this run
+      // Ignore
+    }
+
+    try {
+      await pool.query(`ALTER TABLE patrol_officers ADD COLUMN location geography(Point, 4326);`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS patrol_location_gist ON patrol_officers USING GIST (location);`);
+    } catch (e) {
+      // Ignore if already exists
     }
 
     console.log('PostgreSQL Database tables verified successfully.');
