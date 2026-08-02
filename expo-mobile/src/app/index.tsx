@@ -15,7 +15,7 @@ import Animated, {
 const { width } = Dimensions.get('window');
 
 // Connects to the Node.js backend exposed publicly via Localtunnel
-const SERVER_URL = 'https://womensafetybackend.loca.lt';
+const SERVER_URL = 'https://tn-safety-app.onrender.com';
 
 export default function HomeScreen() {
   const [socket, setSocket] = useState<any>(null);

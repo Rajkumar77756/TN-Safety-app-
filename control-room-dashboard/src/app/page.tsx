@@ -21,12 +21,20 @@ export interface Incident {
   status: 'ACTIVE' | 'ANSWERED';
 }
 
+const SERVER_URL = "https://tn-safety-app.onrender.com";
+
 export default function Home() {
   const [time, setTime] = useState<string>("");
   const [incidents, setIncidents] = useState<Record<string, Incident>>({});
   const [socket, setSocket] = useState<Socket | null>(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
   const [dispatcherNotes, setDispatcherNotes] = useState<string>("");
+  
+  // Auth State
+  const [token, setToken] = useState<string | null>(null);
+  const [username, setUsername] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
+  const [loginError, setLoginError] = useState<string>("");
 
   useEffect(() => {
     // Start clock
@@ -35,13 +43,31 @@ export default function Home() {
       setTime(new Date().toLocaleTimeString());
     }, 1000);
 
-    // Connect to the public Localtunnel Node.js backend
-    const newSocket = io("https://womensafetybackend.loca.lt", {
-      extraHeaders: {
-        'Bypass-Tunnel-Reminder': 'true'
-      }
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+
+    // Connect to the Render Node.js backend using the JWT Auth Token
+    const newSocket = io(SERVER_URL, {
+      auth: { token }
     });
     setSocket(newSocket);
+
+    newSocket.on("connect", () => {
+      console.log("Connected to secure socket server!");
+      // The dispatcher must actively join the incident channel
+      newSocket.emit("join_incident", { incidentId: "GLOBAL_TEST_INCIDENT" });
+    });
+
+    newSocket.on("connect_error", (err) => {
+      console.error("Connection Error:", err.message);
+      if (err.message === "unauthorized") {
+        setToken(null);
+        setLoginError("Session expired. Please log in again.");
+      }
+    });
 
     // Listen for new or updated incident locations
     newSocket.on("incident_location_updated", (payload: any) => {
@@ -70,14 +96,33 @@ export default function Home() {
     });
 
     return () => {
-      clearInterval(interval);
       newSocket.disconnect();
     };
-  }, []);
+  }, [token]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    try {
+      const res = await fetch(`${SERVER_URL}/api/dispatcher/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        setToken(data.token);
+      } else {
+        setLoginError(data.error || "Login failed");
+      }
+    } catch (err) {
+      setLoginError("Server unreachable. Please wait for Render to spin up.");
+    }
+  };
 
   const handleAnswerIncident = async (incidentId: string) => {
     try {
-      await fetch(`http://localhost:4000/api/dispatch/incident/${incidentId}/status`, {
+      await fetch(`${SERVER_URL}/api/dispatch/incident/${incidentId}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'ANSWERED', notes: dispatcherNotes })
@@ -92,6 +137,45 @@ export default function Home() {
   const incidentList = Object.values(incidents).sort((a, b) => b.timestamp - a.timestamp);
   const selectedIncident = selectedIncidentId ? incidents[selectedIncidentId] : null;
 
+  if (!token) {
+    return (
+      <main className={styles.main} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ background: '#1a1a2e', padding: '2rem', borderRadius: '12px', border: '1px solid #333', minWidth: '350px' }}>
+          <div className={styles.logo} style={{ marginBottom: '2rem', justifyContent: 'center' }}>
+            <div className={styles.pulseDot}></div>
+            <h1 style={{ margin: 0 }}>Offline Guardian</h1>
+          </div>
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {loginError && <div style={{ color: '#ff4d4f', fontSize: '0.9rem', textAlign: 'center' }}>{loginError}</div>}
+            <input 
+              type="text" 
+              placeholder="Dispatcher Username" 
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              style={{ padding: '0.8rem', borderRadius: '6px', border: 'none', background: '#0f0f1a', color: 'white' }}
+            />
+            <input 
+              type="password" 
+              placeholder="Password" 
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              style={{ padding: '0.8rem', borderRadius: '6px', border: 'none', background: '#0f0f1a', color: 'white' }}
+            />
+            <button 
+              type="submit" 
+              style={{ padding: '0.8rem', borderRadius: '6px', border: 'none', background: '#ff4d4f', color: 'white', fontWeight: 'bold', cursor: 'pointer', marginTop: '0.5rem' }}
+            >
+              SECURE LOGIN
+            </button>
+            <div style={{ textAlign: 'center', fontSize: '0.8rem', color: '#666', marginTop: '1rem' }}>
+              CM Pilot Demo: use admin / admin123
+            </div>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className={styles.main}>
       <header className={styles.header}>
@@ -100,8 +184,9 @@ export default function Home() {
           <h1>Offline Guardian // <span className={styles.subtitle}>Master Control</span></h1>
         </div>
         <div className={styles.status}>
-          <span className={styles.statusOnline}>SYSTEM ONLINE</span>
+          <span className={styles.statusOnline}>SYSTEM SECURE</span>
           <span className={styles.time}>{time}</span>
+          <button onClick={() => setToken(null)} style={{ marginLeft: '1rem', background: 'transparent', border: '1px solid #555', color: '#aaa', padding: '0.2rem 0.5rem', borderRadius: '4px', cursor: 'pointer'}}>Logout</button>
         </div>
       </header>
       
