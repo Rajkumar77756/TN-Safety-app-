@@ -426,7 +426,7 @@ io.on('connection', (socket) => {
     (async () => {
       try {
         const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${payload.latitude}&lon=${payload.longitude}`, {
-          headers: { 'User-Agent': 'Raksha-Safety-App/1.0 (pilot demo)' }
+          headers: { 'User-Agent': 'Thunai-Safety-App/1.0 (pilot demo)' }
         });
         const data: any = await response.json();
         

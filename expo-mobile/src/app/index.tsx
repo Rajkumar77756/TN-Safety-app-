@@ -161,9 +161,9 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       {/* Top Header */}
-      <View style={styles.header}>
-        <Text style={styles.logoText}>Raksha</Text>
-      </View>
+        <View style={styles.header}>
+          <Text style={styles.logoText}>Thunai</Text>
+        </View>
 
       {/* Instagram-style "Stories" Row (Trusted Contacts) */}
       <View style={styles.storiesContainer}>
