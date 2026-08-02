@@ -16,7 +16,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 const { width } = Dimensions.get('window');
-const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
+export const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
 
 interface Contact {
   id: string;
