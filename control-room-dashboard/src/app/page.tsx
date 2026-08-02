@@ -51,6 +51,10 @@ export default function Home() {
   const [username, setUsername] = useState<string>("");
   const [password, setPassword] = useState<string>("");
   const [loginError, setLoginError] = useState<string>("");
+  
+  // Dashboard Tabs
+  const [activeTab, setActiveTab] = useState<'INCIDENTS' | 'OFFICERS'>('INCIDENTS');
+  const [officers, setOfficers] = useState<any[]>([]);
 
   useEffect(() => {
     // Start clock
@@ -61,6 +65,48 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, []);
+
+  const fetchOfficers = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${SERVER_URL}/api/admin/officers`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setOfficers(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch officers", e);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'OFFICERS' && token) {
+      fetchOfficers();
+    }
+  }, [activeTab, token]);
+
+  const verifyOfficer = async (officerId: number) => {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/admin/officers/verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ officerId })
+      });
+      if (res.ok) {
+        alert("Officer Verified Successfully.");
+        fetchOfficers();
+      } else {
+        alert("Verification Failed. You may not have Admin privileges.");
+      }
+    } catch (e) {
+      alert("Verification Request Failed.");
+    }
+  };
 
   useEffect(() => {
     if (!token) return;
@@ -208,119 +254,164 @@ export default function Home() {
   }
 
   return (
-    <main className={styles.main}>
-      <header className={styles.header}>
-        <div className={styles.logo}>
-          <div className={styles.pulseDot}></div>
-          <h1>Offline Guardian // <span className={styles.subtitle}>Master Control</span></h1>
-        </div>
-        
-        {/* District Filter Dropdown */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginLeft: 'auto', marginRight: '2rem' }}>
-          <span style={{ color: '#888', fontSize: '0.9rem' }}>Jurisdiction:</span>
-          <select 
-            value={selectedDistrict}
-            onChange={(e) => setSelectedDistrict(e.target.value)}
-            style={{ padding: '0.5rem', background: '#111', color: 'white', border: '1px solid #333', borderRadius: '4px' }}
-          >
-            {availableDistricts.map(dist => (
-              <option key={dist} value={dist}>{dist}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className={styles.status}>
-          <span className={styles.statusOnline}>SYSTEM SECURE</span>
-          <span className={styles.time}>{time}</span>
-          <button onClick={() => setToken(null)} style={{ marginLeft: '1rem', background: 'transparent', border: '1px solid #555', color: '#aaa', padding: '0.2rem 0.5rem', borderRadius: '4px', cursor: 'pointer'}}>Logout</button>
-        </div>
-      </header>
-      
-      <div className={styles.mapContainer}>
-        <div className={styles.mapOverlay}>
-          <h2>Active Area Monitoring</h2>
-          <p>Listening for Tier 1 Online & Tier 3 Mesh relay packets...</p>
-        </div>
-        <MapComponent incidents={incidents} selectedIncidentId={selectedIncidentId} />
-      </div>
-
-      {/* Instagram-style Incident Queue */}
-      <div className={styles.sidebar}>
-        <h3>Incoming Incidents</h3>
-        
-        {incidentList.length === 0 ? (
-          <div className={styles.emptyState}>
-            Waiting for SOS trigger in {selectedDistrict === "ALL" ? "all districts" : selectedDistrict}...
-          </div>
-        ) : (
-          <div className={styles.queueContainer}>
-            {incidentList.map(incident => (
-              <div 
-                key={incident.incidentId} 
-                className={`${styles.queueItem} ${selectedIncidentId === incident.incidentId ? styles.selected : ''}`}
-                onClick={() => setSelectedIncidentId(incident.incidentId)}
-              >
-                <div className={`${styles.avatarRing} ${incident.status === 'ACTIVE' ? styles.activeRing : ''}`}>
-                  <div className={styles.avatarInner}>
-                    {incident.deviceUuid.substring(0,2).toUpperCase()}
-                  </div>
-                </div>
-                <div className={styles.incidentDetails}>
-                  <div className={styles.incidentHeader}>
-                    <strong>ID: {incident.deviceUuid.substring(0,8)}</strong>
-                    <span className={styles.queueTime}>{new Date(incident.timestamp).toLocaleTimeString()}</span>
-                  </div>
-                  <div className={styles.incidentSub}>
-                    <span style={{
-                      color: incident.status === 'ACTIVE' ? '#ff4d4f' : 
-                             incident.status === 'CANCELLED_BY_USER' ? '#555555' : '#00ff00',
-                      fontWeight: 'bold',
-                      fontSize: '0.8rem'
-                    }}>
-                      {incident.status === 'CANCELLED_BY_USER' ? 'OFFLINE (DISARMED)' : incident.status}
-                    </span>
-                    {incident.district && (
-                      <span style={{ color: '#aaa', marginLeft: '0.5rem', fontSize: '0.75rem' }}> • {incident.district}</span>
-                    )}
-                    {incident.trustStatus === 'NEEDS_REVIEW' && incident.status === 'ACTIVE' && (
-                      <span className={styles.flagWarning}> • FLAGGED</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        
-        {/* Action Panel for answering the selected incident */}
-        {selectedIncident && (selectedIncident.status === 'ACTIVE' || selectedIncident.status === 'CANCELLED_BY_USER') && (
-          <div className={styles.actionPanel}>
-            <h4>{selectedIncident.status === 'CANCELLED_BY_USER' ? "Log False Alarm" : "Take Information"}</h4>
-            <div className={styles.infoRow}>
-              <span>Device:</span> {selectedIncident.deviceUuid.substring(0,8)}
-            </div>
-            <div className={styles.infoRow}>
-              <span>District:</span> {selectedIncident.district || "Resolving..."}
-            </div>
-            <div className={styles.infoRow}>
-              <span>Battery:</span> {selectedIncident.battery}%
-            </div>
-            <textarea 
-              className={styles.notesInput}
-              placeholder="Dispatcher notes (e.g., false alarm logged)..."
-              value={dispatcherNotes}
-              onChange={(e) => setDispatcherNotes(e.target.value)}
-            />
+    <div className={styles.container}>
+      {/* Top Navbar */}
+      <nav className={styles.navbar}>
+        <div className={styles.navLeft}>
+          <div className={styles.pulseIndicator}></div>
+          <h1 className={styles.navTitle}>Offline Guardian <span className={styles.navSubtitle}>// Master Control</span></h1>
+          
+          {/* Tabs */}
+          <div className={styles.tabContainer}>
             <button 
-              className={styles.answerButton}
-              style={{ backgroundColor: selectedIncident.status === 'CANCELLED_BY_USER' ? '#555' : '#ff4d4f' }}
-              onClick={() => handleAnswerIncident(selectedIncident.incidentId)}
+              className={activeTab === 'INCIDENTS' ? styles.tabButtonActive : styles.tabButton}
+              onClick={() => setActiveTab('INCIDENTS')}
             >
-              {selectedIncident.status === 'CANCELLED_BY_USER' ? "Archive Incident" : "Mark as Answered"}
+              Incidents
+            </button>
+            <button 
+              className={activeTab === 'OFFICERS' ? styles.tabButtonActive : styles.tabButton}
+              onClick={() => setActiveTab('OFFICERS')}
+            >
+              Verify Officers
             </button>
           </div>
+        </div>
+
+        <div className={styles.navRight}>
+          {activeTab === 'INCIDENTS' && (
+            <div className={styles.filterGroup}>
+              <label>Jurisdiction:</label>
+              <select 
+                value={selectedDistrict} 
+                onChange={(e) => setSelectedDistrict(e.target.value)}
+                className={styles.districtSelect}
+              >
+                {availableDistricts.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+          )}
+          <div className={styles.navStatus}>SYSTEM SECURE</div>
+          <div className={styles.navTime}>{time}</div>
+          <button className={styles.logoutButton} onClick={() => setToken(null)}>Logout</button>
+        </div>
+      </nav>
+
+      {/* Main Content Area */}
+      <main className={styles.mainContent}>
+        {activeTab === 'INCIDENTS' ? (
+          <>
+            {/* Left: Interactive Map */}
+            <div className={styles.mapContainer}>
+              <div className={styles.mapOverlay}>
+                <h2>ACTIVE AREA MONITORING</h2>
+                <p>Listening for Tier 1 Online & Tier 3 Mesh relay packets...</p>
+              </div>
+              <MapComponent activeIncidentList={activeIncidentList} />
+            </div>
+
+            {/* Right: Sidebar */}
+            <div className={styles.sidebar}>
+              <div className={styles.sidebarHeader}>
+                <h3>INCOMING INCIDENTS</h3>
+              </div>
+              
+              <div className={styles.incidentList}>
+                {activeIncidentList.length === 0 && (
+                  <div className={styles.emptyState}>No active incidents in this jurisdiction.</div>
+                )}
+                
+                {activeIncidentList.map(incident => (
+                  <div 
+                    key={incident.incidentId}
+                    className={`${styles.incidentCard} ${selectedIncidentId === incident.incidentId ? styles.selectedCard : ''}`}
+                    onClick={() => setSelectedIncidentId(incident.incidentId)}
+                  >
+                    <div className={styles.cardHeader}>
+                      <div className={`${styles.urgencyBadge} ${incident.status !== 'ACTIVE' ? styles.urgencyBadgeAnswered : ''}`}>
+                        {incident.trustStatus === 'NEEDS_REVIEW' ? 'FLAG' : 'US'}
+                      </div>
+                      <div className={styles.incidentHeader}>
+                        <strong>ID: {incident.deviceUuid.substring(0,8)}</strong>
+                        <span className={styles.queueTime}>{new Date(incident.timestamp).toLocaleTimeString()}</span>
+                      </div>
+                      <div className={styles.incidentSub}>
+                        <span style={{
+                          color: incident.status === 'ACTIVE' ? '#ff4d4f' : 
+                                 incident.status === 'CANCELLED_BY_USER' ? '#555555' : '#00ff00',
+                          fontWeight: 'bold',
+                          fontSize: '0.8rem'
+                        }}>
+                          {incident.status === 'CANCELLED_BY_USER' ? 'OFFLINE (DISARMED)' : incident.status}
+                        </span>
+                        {incident.district && (
+                          <span style={{ color: '#aaa', marginLeft: '0.5rem', fontSize: '0.75rem' }}> • {incident.district}</span>
+                        )}
+                        {incident.trustStatus === 'NEEDS_REVIEW' && incident.status === 'ACTIVE' && (
+                          <span className={styles.flagWarning}> • FLAGGED</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              {/* Action Panel for answering the selected incident */}
+              {selectedIncident && (selectedIncident.status === 'ACTIVE' || selectedIncident.status === 'CANCELLED_BY_USER') && (
+                <div className={styles.actionPanel}>
+                  <h4>{selectedIncident.status === 'CANCELLED_BY_USER' ? "Log False Alarm" : "Take Information"}</h4>
+                  <div className={styles.infoRow}>
+                    <span>Device:</span> {selectedIncident.deviceUuid.substring(0,8)}
+                  </div>
+                  <div className={styles.infoRow}>
+                    <span>District:</span> {selectedIncident.district || "Resolving..."}
+                  </div>
+                  <div className={styles.infoRow}>
+                    <span>Battery:</span> {selectedIncident.battery}%
+                  </div>
+                  <textarea 
+                    className={styles.notesInput}
+                    placeholder="Dispatcher notes (e.g., false alarm logged)..."
+                    value={dispatcherNotes}
+                    onChange={(e) => setDispatcherNotes(e.target.value)}
+                  />
+                  <button 
+                    className={styles.answerButton}
+                    style={{ backgroundColor: selectedIncident.status === 'CANCELLED_BY_USER' ? '#555' : '#ff4d4f' }}
+                    onClick={() => handleAnswerIncident(selectedIncident.incidentId)}
+                  >
+                    {selectedIncident.status === 'CANCELLED_BY_USER' ? "Archive Incident" : "Mark as Answered"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          /* OFFICER VERIFICATION TAB */
+          <div className={styles.officerContainer}>
+            <div className={styles.officerHeader}>
+              <h2>Patrol Officer Verification</h2>
+              <p>Cross-check badge numbers against the registry before approving access to the live dispatch stream.</p>
+            </div>
+            <div className={styles.officerList}>
+              {officers.map(off => (
+                <div key={off.id} className={styles.officerCard}>
+                  <div className={styles.officerInfo}>
+                    <strong>Badge: {off.badge_number}</strong>
+                    <span>Email: {off.email}</span>
+                    <span>Status: <b style={{ color: off.status === 'VERIFIED' ? '#00ff00' : '#f5a623'}}>{off.status}</b></span>
+                  </div>
+                  {off.status === 'PENDING' && (
+                    <button className={styles.verifyBtn} onClick={() => verifyOfficer(off.id)}>
+                      Approve & Verify
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         )}
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }
