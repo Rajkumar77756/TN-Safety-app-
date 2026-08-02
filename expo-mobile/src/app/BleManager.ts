@@ -2,10 +2,9 @@ import { BleManager } from 'react-native-ble-plx';
 import BLEAdvertiser from 'react-native-ble-advertiser';
 import { Platform, PermissionsAndroid } from 'react-native';
 import { SERVER_URL } from './index';
-import { Buffer } from 'buffer';
 
-// Initialize the BLE PLX Manager for scanning (Relay Mode)
-export const bleManager = new BleManager();
+// Initialize the BLE PLX Manager for scanning lazily to prevent startup crashes
+export let bleManager: BleManager | null = null;
 
 // Unique 128-bit UUID for the Thunai SOS Service
 export const THUNAI_SOS_SERVICE_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
@@ -37,15 +36,11 @@ export const startOfflineSosBroadcast = async (payload: { userId: string, lat: n
   try {
     console.log('[BLE] Starting Offline SOS Broadcast...');
     
-    // In a real app, encrypt this payload with the backend's Public Key
-    // For this pilot, we encode it as a simple base64/JSON string
-    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64');
-    
-    // Set up the BLE Advertiser
+    // Android supports advertising custom service data easily
+    // In a production app, the payload would be converted to a byte array and passed here.
+    // For this pilot, we broadcast a mock byte array [12, 34] to prove the mesh works.
     BLEAdvertiser.setCompanyId(0xFFFF); // Use testing company ID
-    
     if (Platform.OS === 'android') {
-      // Android supports advertising custom service data easily
       await BLEAdvertiser.broadcast(THUNAI_SOS_SERVICE_UUID, [12, 34], {
         includeDeviceName: false,
         includeTxPowerLevel: true,
@@ -76,6 +71,10 @@ export const stopOfflineSosBroadcast = async () => {
 export const startBackgroundRelayScanner = () => {
   console.log('[BLE] Starting Background Relay Scanner...');
   
+  if (!bleManager) {
+    bleManager = new BleManager();
+  }
+  
   bleManager.startDeviceScan([THUNAI_SOS_SERVICE_UUID], { allowDuplicates: false }, async (error, device) => {
     if (error) {
       console.error('[BLE] Scan error', error);
@@ -86,7 +85,9 @@ export const startBackgroundRelayScanner = () => {
       console.log(`[BLE] Detected SOS Signal from Device ID: ${device.id}`);
       
       // Stop scanning temporarily while we relay to prevent spam
-      bleManager.stopDeviceScan();
+      if (bleManager) {
+        bleManager.stopDeviceScan();
+      }
       
       // In a real implementation, extract the Manufacturer Data payload and relay it
       try {
