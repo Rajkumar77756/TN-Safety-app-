@@ -331,7 +331,7 @@ export default function Home() {
                 <h2>ACTIVE AREA MONITORING</h2>
                 <p>Listening for Tier 1 Online & Tier 3 Mesh relay packets...</p>
               </div>
-              <MapComponent activeIncidentList={activeIncidentList} />
+              <MapComponent incidents={incidents} selectedIncidentId={selectedIncidentId} />
             </div>
 
             {/* Right: Sidebar */}
@@ -341,11 +341,11 @@ export default function Home() {
               </div>
               
               <div className={styles.incidentList}>
-                {activeIncidentList.length === 0 && (
+                {incidentList.length === 0 && (
                   <div className={styles.emptyState}>No active incidents in this jurisdiction.</div>
                 )}
                 
-                {activeIncidentList.map(incident => (
+                {incidentList.map(incident => (
                   <div 
                     key={incident.incidentId}
                     className={`${styles.incidentCard} ${selectedIncidentId === incident.incidentId ? styles.selectedCard : ''}`}
