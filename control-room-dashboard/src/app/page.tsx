@@ -353,7 +353,7 @@ export default function Home() {
                   >
                     <div className={styles.cardHeader}>
                       <div className={`${styles.urgencyBadge} ${incident.status !== 'ACTIVE' ? styles.urgencyBadgeAnswered : ''}`}>
-                        {incident.trustStatus === 'NEEDS_REVIEW' ? 'FLAG' : 'US'}
+                        {incident.trustStatus === 'NEEDS_REVIEW' ? 'FLAG' : 'SOS'}
                       </div>
                       <div className={styles.incidentHeader}>
                         <strong>ID: {incident.deviceUuid.substring(0,8)}</strong>
@@ -393,6 +393,30 @@ export default function Home() {
                   <div className={styles.infoRow}>
                     <span>Battery:</span> {selectedIncident.battery}%
                   </div>
+                  
+                  {selectedIncident.senderProfile && (
+                    <div style={{ padding: '12px', background: '#222', borderRadius: '8px', marginBottom: '15px', borderLeft: '4px solid #ff4d4f' }}>
+                      <h5 style={{ margin: '0 0 10px 0', color: '#ff4d4f', fontSize: '11px', letterSpacing: '1px' }}>CIVILIAN IDENTITY</h5>
+                      <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                        {selectedIncident.senderProfile.photo_base64 && (
+                          <img src={selectedIncident.senderProfile.photo_base64} style={{ width: '60px', height: '60px', borderRadius: '30px', border: '2px solid #555' }} />
+                        )}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: '15px', color: '#fff', fontWeight: 'bold' }}>
+                            {selectedIncident.senderProfile.name} {selectedIncident.senderProfile.age ? `(${selectedIncident.senderProfile.age})` : ''}
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#00ff00', fontWeight: 'bold', marginTop: '2px' }}>
+                            {selectedIncident.senderProfile.phone_number}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#ccc', marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <div><strong style={{ color: '#888' }}>Home:</strong> {selectedIncident.senderProfile.current_address || 'Unknown'}</div>
+                        <div><strong style={{ color: '#888' }}>Work/School:</strong> {selectedIncident.senderProfile.workplace_details || 'Unknown'}</div>
+                      </div>
+                    </div>
+                  )}
+
                   <textarea 
                     className={styles.notesInput}
                     placeholder="Dispatcher notes (e.g., false alarm logged)..."
