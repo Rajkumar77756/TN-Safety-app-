@@ -110,10 +110,10 @@ export const initDb = async () => {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS patrol_officers (
         id SERIAL PRIMARY KEY,
-        email VARCHAR(255) UNIQUE NOT NULL,
+        phone_number VARCHAR(50) UNIQUE NOT NULL,
         badge_number VARCHAR(100) UNIQUE NOT NULL,
         status VARCHAR(50) DEFAULT 'PENDING', -- PENDING, VERIFIED, REJECTED, REVOKED
-        email_verified BOOLEAN DEFAULT FALSE,
+        phone_verified BOOLEAN DEFAULT FALSE,
         is_on_duty BOOLEAN DEFAULT FALSE,
         lat DOUBLE PRECISION,
         lng DOUBLE PRECISION,
@@ -132,6 +132,14 @@ export const initDb = async () => {
       );
     `);
     
+    // Automatic Migration: Change email to phone_number if it exists
+    try {
+      await pool.query(`ALTER TABLE patrol_officers RENAME COLUMN email TO phone_number;`);
+      await pool.query(`ALTER TABLE patrol_officers RENAME COLUMN email_verified TO phone_verified;`);
+    } catch (e) {
+      // Ignore error if column already renamed or table didn't exist prior to this run
+    }
+
     console.log('PostgreSQL Database tables verified successfully.');
   } catch (error) {
     console.error('Error initializing database:', error);

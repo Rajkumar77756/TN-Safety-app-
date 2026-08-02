@@ -168,25 +168,25 @@ app.post('/api/admin/officers/revoke', requireAdmin, async (req, res) => {
 
 // --- PATROL OFFICER API (Signup / Login) ---
 app.post('/api/patrol/login', async (req, res) => {
-  const { email, badgeNumber } = req.body;
+  const { phoneNumber, badgeNumber } = req.body;
   
-  if (!email || !email.endsWith('@tnpolice.gov.in')) {
-    return res.status(403).json({ error: 'Must use official @tnpolice.gov.in email' });
+  if (!phoneNumber || !badgeNumber) {
+    return res.status(403).json({ error: 'Phone number and badge number are required' });
   }
 
   try {
     // Upsert the officer into the DB
-    let result = await pool.query(`SELECT id, status FROM patrol_officers WHERE email = $1`, [email]);
+    let result = await pool.query(`SELECT id, status FROM patrol_officers WHERE phone_number = $1`, [phoneNumber]);
     let officerId;
     let status;
 
     if (result.rows.length === 0) {
       // New signup
       const insert = await pool.query(`
-        INSERT INTO patrol_officers (email, badge_number, email_verified, status)
+        INSERT INTO patrol_officers (phone_number, badge_number, phone_verified, status)
         VALUES ($1, $2, TRUE, 'PENDING') -- Simulated OTP success
         RETURNING id, status
-      `, [email, badgeNumber]);
+      `, [phoneNumber, badgeNumber]);
       officerId = insert.rows[0].id;
       status = insert.rows[0].status;
     } else {

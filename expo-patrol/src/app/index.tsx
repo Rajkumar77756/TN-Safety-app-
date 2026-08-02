@@ -12,7 +12,7 @@ export default function PatrolScreen() {
   const [socket, setSocket] = useState<any>(null);
   
   // Auth State
-  const [email, setEmail] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [badgeNumber, setBadgeNumber] = useState('');
   const [token, setToken] = useState<string | null>(null);
   const [isVerified, setIsVerified] = useState(false);
@@ -59,14 +59,13 @@ export default function PatrolScreen() {
   }, [token]);
 
   const handleLogin = async () => {
-    if (!email || !badgeNumber) return Alert.alert('Error', 'Please enter email and badge number.');
-    if (!email.endsWith('@tnpolice.gov.in')) return Alert.alert('Error', 'Must use official @tnpolice.gov.in email');
+    if (!phoneNumber || !badgeNumber) return Alert.alert('Error', 'Please enter phone number and badge number.');
 
     try {
       const res = await fetch(`${SERVER_URL}/api/patrol/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, badgeNumber })
+        body: JSON.stringify({ phoneNumber, badgeNumber })
       });
       const data = await res.json();
       
@@ -75,7 +74,7 @@ export default function PatrolScreen() {
         if (data.status === 'VERIFIED') {
           setIsVerified(true);
         } else {
-          Alert.alert('Account Pending', 'Your email is verified. Please wait for the Control Room Admin to cross-check your badge number and verify your account.');
+          Alert.alert('Account Pending', 'Your phone number is verified. Please wait for the Control Room Admin to cross-check your badge number and verify your account.');
         }
       } else {
         Alert.alert('Error', data.error);
@@ -125,10 +124,11 @@ export default function PatrolScreen() {
           
           <TextInput
             style={styles.input}
-            placeholder="Official Email"
+            placeholder="Phone Number"
             placeholderTextColor="#666"
-            value={email}
-            onChangeText={setEmail}
+            keyboardType="phone-pad"
+            value={phoneNumber}
+            onChangeText={setPhoneNumber}
             autoCapitalize="none"
           />
           <TextInput

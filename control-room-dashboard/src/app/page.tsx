@@ -422,7 +422,7 @@ export default function Home() {
                 <div key={off.id} className={styles.officerCard}>
                   <div className={styles.officerInfo}>
                     <strong>Badge: {off.badge_number}</strong>
-                    <span>Email: {off.email}</span>
+                    <span>Phone: {off.phone_number}</span>
                     <span>
                       Status: <b style={{ color: off.status === 'VERIFIED' ? '#00ff00' : off.status === 'REVOKED' ? '#ff4d4f' : '#f5a623'}}>{off.status}</b>
                     </span>
