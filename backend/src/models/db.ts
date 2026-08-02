@@ -19,23 +19,46 @@ export const initDb = async () => {
     // Requires PostGIS extension installed in the DB
     await client.query(`CREATE EXTENSION IF NOT EXISTS postgis;`);
 
-    // Devices table (UUID instead of IMEI)
+    // Dispatchers table (Auth)
     await client.query(`
-      CREATE TABLE IF NOT EXISTS devices (
-        uuid UUID PRIMARY KEY,
-        auth_key VARCHAR(255) NOT NULL,
-        status VARCHAR(50) DEFAULT 'ACTIVE',
+      CREATE TABLE IF NOT EXISTS dispatchers (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        username VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // Incidents table
+    // Device Identity (Highly sensitive, always deletable on request)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS device_identity (
+        uuid UUID PRIMARY KEY,
+        phone_number VARCHAR(50),
+        trusted_contacts JSONB,
+        registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Device Operational (Pseudonymous, subject to legal holds)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS device_operational (
+        uuid UUID PRIMARY KEY REFERENCES device_identity(uuid) ON DELETE CASCADE,
+        auth_key_hash VARCHAR(255) NOT NULL,
+        false_alarm_count INTEGER DEFAULT 0,
+        status VARCHAR(50) DEFAULT 'ACTIVE'
+      );
+    `);
+
+    // Incidents table (with State Machine)
     await client.query(`
       CREATE TABLE IF NOT EXISTS incidents (
-        id UUID PRIMARY KEY,
-        device_uuid UUID REFERENCES devices(uuid) ON DELETE CASCADE,
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        device_uuid UUID REFERENCES device_operational(uuid) ON DELETE CASCADE,
         status VARCHAR(50) DEFAULT 'ACTIVE',
-        legal_hold BOOLEAN DEFAULT false, -- Used to block DPDP deletion for open law enforcement cases
+        legal_hold_state VARCHAR(50) DEFAULT 'NONE', -- NONE, AUTO_HELD, DISPATCHER_HELD, RELEASED
+        legal_hold_expires_at TIMESTAMP,
+        legal_hold_set_by UUID REFERENCES dispatchers(id),
+        legal_hold_set_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -50,6 +73,18 @@ export const initDb = async () => {
         battery_pct INTEGER,
         tier VARCHAR(20), -- 'ONLINE', 'SMS', 'MESH'
         recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Deletion Requests Audit Table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS deletion_requests (
+        id SERIAL PRIMARY KEY,
+        device_uuid UUID NOT NULL,
+        requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        outcome VARCHAR(50) NOT NULL, -- FULL, PARTIAL_IDENTITY_ONLY, BLOCKED
+        held_incident_ids JSONB,
+        notified_at TIMESTAMP
       );
     `);
 

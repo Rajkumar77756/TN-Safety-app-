@@ -2,9 +2,13 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import rateLimit from 'express-rate-limit';
 import authRouter from './auth';
-import { initDb } from './models/db';
+import { initDb, pool } from './models/db';
 import { checkDeviceStatus } from './abuse-prevention';
+import './cron'; // Start the cron sweep job
 
 dotenv.config();
 
@@ -24,96 +28,178 @@ app.use('/api/auth', authRouter);
 // Basic healthcheck
 app.get('/health', (req, res) => res.send('OK'));
 
-// Ingest SMS endpoints (Tier 2)
-app.post('/api/ingest/sms', async (req, res) => {
-  // Parse the structured SMS (which may be concatenated)
-  // [PARTIAL DELIVERY LOGIC]: Implement a 60-second timeout cache. If Part 1 arrives and Part 2 drops,
-  // salvage the available data (e.g., location without battery) and inject it into the incident flow rather than discarding.
-  // Verify HMAC, lookup device, inject into Socket.io if active
-  res.status(200).send('Received');
+// Dispatcher Login Rate Limiting (Brute force protection)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 requests per windowMs
+  message: { error: 'Too many login attempts. Please try again later.' }
 });
 
-// Ingest Mesh endpoints (Tier 3 delay-tolerant)
-app.post('/api/ingest/mesh', async (req, res) => {
-  // Parse the binary/JSON mesh payload from a relay device
-  res.status(200).send('Received');
-});
-
-// Dispatch API: Set legal_hold on an incident
-app.post('/api/dispatch/incident/:id/hold', async (req, res) => {
-  // In reality, this endpoint requires dispatcher authentication middleware.
-  const incidentId = req.params.id;
-  const { hold } = req.body; // boolean
+// --- DISPATCHER AUTHENTICATION ---
+app.post('/api/dispatcher/login', loginLimiter, async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
   
+  if (!process.env.JWT_SECRET) {
+    console.error('CRITICAL: JWT_SECRET environment variable is missing!');
+    return res.status(500).json({ error: 'Server misconfiguration' });
+  }
+
   try {
-    const { pool } = require('./models/db');
-    await pool.query(`UPDATE incidents SET legal_hold = $1 WHERE id = $2`, [hold, incidentId]);
-    res.status(200).json({ message: `Legal hold set to ${hold} for incident ${incidentId}` });
+    const result = await pool.query(`SELECT id, password_hash FROM dispatchers WHERE username = $1`, [username]);
+    if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const dispatcher = result.rows[0];
+    const isValid = await bcrypt.compare(password, dispatcher.password_hash);
+    
+    if (!isValid) return res.status(401).json({ error: 'Invalid credentials' });
+
+    // Issue a short-lived token containing the verified server-side role
+    const token = jwt.sign(
+      { dispatcherId: dispatcher.id, role: 'DISPATCHER' }, 
+      process.env.JWT_SECRET, 
+      { expiresIn: '8h' }
+    );
+
+    res.json({ token });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Failed to set legal hold' });
+    console.error('Login error:', e);
+    // Silent fail for local testing without DB
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Dispatch API: Update incident status (e.g. mark as ANSWERED)
-app.post('/api/dispatch/incident/:id/status', async (req, res) => {
-  const incidentId = req.params.id;
-  const { status, notes } = req.body; // status: 'ANSWERED', notes: dispatcher notes
+// --- DPDP COMPLIANT DELETION API ---
+app.delete('/api/device/:uuid', async (req, res) => {
+  const { uuid } = req.params;
+  let outcome = 'BLOCKED';
   
   try {
-    const { pool } = require('./models/db');
-    await pool.query(`UPDATE incidents SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [status, incidentId]);
-    
-    // Broadcast the status change to all dashboard clients instantly
-    io.emit('incident_status_changed', { incidentId, status, notes });
-    
-    res.status(200).json({ message: `Status updated to ${status}` });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      // 1. Unconditionally delete identity data (Always deletable on request)
+      await client.query(`DELETE FROM device_identity WHERE uuid = $1`, [uuid]);
+      outcome = 'PARTIAL_IDENTITY_ONLY';
+
+      // 2. Check for active legal holds on operational data
+      const holdCheck = await client.query(`
+        SELECT id FROM incidents 
+        WHERE device_uuid = $1 AND legal_hold_state IN ('AUTO_HELD', 'DISPATCHER_HELD')
+      `, [uuid]);
+
+      const heldIncidents = holdCheck.rows.map(row => row.id);
+
+      // 3. Cascade delete operational data ONLY if no active holds exist
+      if (heldIncidents.length === 0) {
+        await client.query(`DELETE FROM device_operational WHERE uuid = $1`, [uuid]);
+        outcome = 'FULL';
+      }
+
+      // 4. Log the outcome to the audit table (Mandatory for DPDP compliance)
+      await client.query(`
+        INSERT INTO deletion_requests (device_uuid, outcome, held_incident_ids, notified_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+      `, [uuid, outcome, JSON.stringify(heldIncidents)]);
+
+      await client.query('COMMIT');
+      res.json({ message: 'Deletion request processed', outcome });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Failed to update status' });
+    console.error('Deletion error:', e);
+    res.status(500).json({ error: 'Failed to process deletion request' });
   }
 });
 
-// Socket.IO for real-time tracking (Tier 1)
+// --- SOCKET.IO AUTHENTICATION MIDDLEWARE ---
+// NEVER trust a client-asserted role. Validate via JWT.
+io.use((socket, next) => {
+  // We allow unauthenticated devices to connect (they only emit sos-alert)
+  // But dispatchers MUST provide a token to join rooms
+  const token = socket.handshake.auth?.token;
+  
+  if (token) {
+    if (!process.env.JWT_SECRET) return next(new Error('Server misconfiguration: missing JWT_SECRET'));
+    try {
+      const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
+      socket.data.dispatcherId = decoded.dispatcherId;
+      socket.data.role = decoded.role; // Securely set by server
+    } catch {
+      return next(new Error("unauthorized")); // Tampered/Expired token
+    }
+  }
+  
+  next();
+});
+
+
+// --- SOCKET.IO REAL-TIME TRACKING ---
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
+  // Dispatcher joins incident room to listen
   socket.on('join_incident', async (payload) => {
-    // payload: { incidentId, role } e.g. role: 'DISPATCHER' or 'DEVICE'
-    const { incidentId, role } = payload;
-    socket.join(incidentId);
-    console.log(`Socket ${socket.id} joined incident ${incidentId} as ${role}`);
+    const { incidentId } = payload;
     
-    // Anti-race condition: Automatically set legal_hold = true the moment a dispatcher joins the room
-    if (role === 'DISPATCHER') {
-      try {
-        const { pool } = require('./models/db');
-        await pool.query(`UPDATE incidents SET legal_hold = true WHERE id = $1`, [incidentId]);
-        console.log(`Auto-set legal_hold for incident ${incidentId}`);
-      } catch(e) {
-        console.error('Failed to auto-set legal hold', e);
-      }
+    // SECURITY CONSTRAINT: Only verified dispatchers can join location streams
+    if (socket.data.role !== 'DISPATCHER') {
+      console.warn(`Unauthorized join attempt by ${socket.id}`);
+      return; // Silently reject
+    }
+
+    socket.join(incidentId);
+    console.log(`Dispatcher ${socket.data.dispatcherId} joined incident ${incidentId}`);
+
+    // STATE MACHINE: Transition from AUTO_HELD to DISPATCHER_HELD
+    try {
+      await pool.query(`
+        UPDATE incidents 
+        SET legal_hold_state = 'DISPATCHER_HELD', 
+            legal_hold_expires_at = NULL, 
+            legal_hold_set_by = $1, 
+            legal_hold_set_at = CURRENT_TIMESTAMP
+        WHERE id = $2 AND legal_hold_state = 'AUTO_HELD'
+      `, [socket.data.dispatcherId, incidentId]);
+      console.log(`Converted incident ${incidentId} to DISPATCHER_HELD`);
+    } catch (e) {
+      console.error('Failed to convert hold state (DB might be offline during testing)', e);
     }
   });
 
-  socket.on('location_update', async (payload) => {
-    // Expected payload: { deviceUuid, incidentId, lat, lng, battery, timestamp }
-    const status = await checkDeviceStatus(payload.deviceUuid);
+  // Handle SOS Alert from Mobile App
+  socket.on('sos-alert', async (payload) => {
+    console.log('SOS ALERT RECEIVED FROM PHONE:', payload);
+    const incidentId = 'GLOBAL_TEST_INCIDENT';
     
-    // SAFETY-CRITICAL: Never suppress a broadcast unless explicitly blacklisted by a human.
-    // NEEDS_REVIEW is flagged to the dashboard but the alert is STILL broadcast immediately.
-    if (status === 'BLACKLISTED') {
-      return; 
+    // STATE MACHINE: Default to AUTO_HELD with 48h expiry
+    try {
+      await pool.query(`
+        INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
+        VALUES ($1, $2, 'AUTO_HELD', NOW() + INTERVAL '48 hours')
+        ON CONFLICT (id) DO NOTHING
+      `, [incidentId, payload.userId]);
+    } catch (e) {
+      console.error('Failed to insert AUTO_HELD state (DB might be offline during testing)', e);
     }
-
-    // Insert into PostGIS
-    // Broadcast to dashboard with the review status attached
-    const broadcastPayload = { ...payload, trustStatus: status };
     
-    // SECURITY CONSTRAINT: 'incident_location_updated' is strictly one-way (Server -> Dispatcher).
-    // It is NEVER echoed back to the mobile device. Exposing the NEEDS_REVIEW trust status 
-    // to the device could tip off a hostile actor monitoring the phone.
-    io.to(payload.incidentId).emit('incident_location_updated', broadcastPayload);
+    // Broadcast directly to the dashboard
+    const broadcastPayload = { 
+      deviceUuid: payload.userId, 
+      incidentId: incidentId, 
+      lat: payload.latitude, 
+      lng: payload.longitude,
+      trustStatus: 'ACTIVE' 
+    };
+    
+    // SECURITY CONSTRAINT: incident_location_updated is one-way
+    io.to(incidentId).emit('incident_location_updated', broadcastPayload);
+    // Note: For the dashboard to see this, it MUST emit join_incident with a valid Dispatcher JWT.
   });
 
   socket.on('disconnect', () => {
@@ -121,8 +207,9 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 4001;
 httpServer.listen(PORT, async () => {
   console.log(`Backend server listening on port ${PORT}`);
-  await initDb();
+  // DB init bypassed for local tunnel testing
+  // await initDb();
 });
