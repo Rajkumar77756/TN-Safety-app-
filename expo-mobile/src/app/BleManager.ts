@@ -18,7 +18,11 @@ export const requestBluetoothPermissions = async () => {
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       ]);
-      return granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED;
+      
+      const scanGranted = granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED;
+      const advertiseGranted = granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE] === PermissionsAndroid.RESULTS.GRANTED;
+      
+      return scanGranted && advertiseGranted;
     } else {
       const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
       return granted === PermissionsAndroid.RESULTS.GRANTED;
@@ -26,6 +30,30 @@ export const requestBluetoothPermissions = async () => {
   }
   return true;
 };
+
+/**
+ * TIGHT BINARY ENCODER
+ * Packs critical emergency data into exactly 16 bytes for BLE Advertising
+ */
+function encodeSosPayload(userId: string, lat: number, lng: number): number[] {
+  const buf = new ArrayBuffer(16);
+  const view = new DataView(buf);
+  
+  // 0-3: Latitude (Float32)
+  view.setFloat32(0, lat, true); // Little endian
+  
+  // 4-7: Longitude (Float32)
+  view.setFloat32(4, lng, true);
+  
+  // 8-11: Timestamp (UInt32) seconds since epoch
+  view.setUint32(8, Math.floor(Date.now() / 1000), true);
+  
+  // 12-15: User ID Hash (UInt32) - extract numbers from 'user_1234'
+  const idHash = parseInt(userId.replace(/\D/g, ''), 10) || 0;
+  view.setUint32(12, idHash, true);
+  
+  return Array.from(new Uint8Array(buf));
+}
 
 /**
  * START BLE BROADCASTING (VICTIM MODE)
@@ -36,12 +64,15 @@ export const startOfflineSosBroadcast = async (payload: { userId: string, lat: n
   try {
     console.log('[BLE] Starting Offline SOS Broadcast...');
     
-    // Android supports advertising custom service data easily
-    // In a production app, the payload would be converted to a byte array and passed here.
-    // For this pilot, we broadcast a mock byte array [12, 34] to prove the mesh works.
+    // Encode the victim's critical data into a 16-byte binary payload
+    const packedBytes = encodeSosPayload(payload.userId, payload.lat, payload.lng);
+    
+    // Set up the BLE Advertiser
     BLEAdvertiser.setCompanyId(0xFFFF); // Use testing company ID
+    
     if (Platform.OS === 'android') {
-      await BLEAdvertiser.broadcast(THUNAI_SOS_SERVICE_UUID, [12, 34], {
+      // Broadcast the custom 16-byte emergency payload in the Manufacturer Data
+      await BLEAdvertiser.broadcast(THUNAI_SOS_SERVICE_UUID, packedBytes, {
         includeDeviceName: false,
         includeTxPowerLevel: true,
       });
