@@ -199,18 +199,45 @@ io.on('connection', (socket) => {
       console.error('Failed to insert AUTO_HELD state (DB might be offline during testing)', e);
     }
     
-    // Broadcast directly to the dashboard
+    // 1. CRITICAL PATH: Broadcast directly to the dashboard immediately (Zero Latency)
     const broadcastPayload = { 
       deviceUuid: payload.userId, 
       incidentId: incidentId, 
       lat: payload.latitude, 
       lng: payload.longitude,
-      trustStatus: 'ACTIVE' 
+      trustStatus: 'ACTIVE',
+      district: null // Set to null initially
     };
     
     // SECURITY CONSTRAINT: incident_location_updated is one-way
     io.to(incidentId).emit('incident_location_updated', broadcastPayload);
-    // Note: For the dashboard to see this, it MUST emit join_incident with a valid Dispatcher JWT.
+    
+    // 2. FIRE-AND-FORGET: Async Reverse-Geocoding
+    (async () => {
+      try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${payload.latitude}&lon=${payload.longitude}`, {
+          headers: { 'User-Agent': 'Raksha-Safety-App/1.0 (pilot demo)' }
+        });
+        const data: any = await response.json();
+        
+        // Normalize district name (e.g. "Chennai District" -> "Chennai")
+        let districtName = data.address?.state_district || data.address?.city_district || "Unknown";
+        districtName = districtName.replace(/district/i, '').trim();
+        
+        // Save to DB
+        try {
+          await pool.query(`UPDATE incidents SET district = $1 WHERE id = $2`, [districtName, incidentId]);
+        } catch (e) {
+          console.error('DB unavailable to save district');
+        }
+
+        // Broadcast district update
+        io.to(incidentId).emit('incident_district_resolved', { incidentId, district: districtName });
+      } catch (e) {
+        console.error('Reverse Geocoding failed (Non-blocking):', e);
+        io.to(incidentId).emit('incident_district_resolved', { incidentId, district: "Unknown" });
+      }
+    })();
   });
 
   socket.on('disconnect', () => {

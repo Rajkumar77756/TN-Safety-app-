@@ -1,6 +1,7 @@
 "use client";
 
-import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
+import { useEffect } from "react";
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { Incident } from "../app/page";
@@ -15,9 +16,28 @@ L.Icon.Default.mergeOptions({
 
 interface MapProps {
   incidents: Record<string, Incident>;
+  selectedIncidentId: string | null;
 }
 
-export default function MapComponent({ incidents }: MapProps) {
+// Controller component to hook into the Leaflet map instance and trigger flyTo animations
+function MapZoomController({ selectedIncidentId, incidents }: MapProps) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (selectedIncidentId && incidents[selectedIncidentId]) {
+      const incident = incidents[selectedIncidentId];
+      // Smoothly animate the map to the selected incident
+      map.flyTo([incident.lat, incident.lng], 16, {
+        animate: true,
+        duration: 1.5 // 1.5 seconds animation
+      });
+    }
+  }, [selectedIncidentId, incidents, map]);
+
+  return null; // This component doesn't render anything visually
+}
+
+export default function MapComponent({ incidents, selectedIncidentId }: MapProps) {
   // Center of Tamil Nadu
   const centerPosition: [number, number] = [11.1271, 78.6569]; 
   
@@ -43,6 +63,8 @@ export default function MapComponent({ incidents }: MapProps) {
         style={{ height: "100%", width: "100%" }}
         zoomControl={true}
       >
+        <MapZoomController selectedIncidentId={selectedIncidentId} incidents={incidents} />
+
         {/* Sleek Dark Mode Map Tiles via CartoDB */}
         <TileLayer
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
@@ -73,6 +95,7 @@ export default function MapComponent({ incidents }: MapProps) {
                   <div className="popup-content">
                     <h3 style={{ color: circleColor }}>SOS Alert</h3>
                     <p><strong>Device UUID:</strong> {incident.deviceUuid.substring(0, 8)}...</p>
+                    <p><strong>District:</strong> {incident.district || "Resolving..."}</p>
                     <p><strong>Battery:</strong> {incident.battery}%</p>
                     <p>
                       <strong>Status:</strong> 

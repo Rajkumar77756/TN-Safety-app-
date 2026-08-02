@@ -15,6 +15,7 @@ export interface Incident {
   incidentId: string;
   lat: number;
   lng: number;
+  district?: string | null;
   battery: number;
   timestamp: number;
   trustStatus: string;
@@ -30,6 +31,10 @@ export default function Home() {
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
   const [dispatcherNotes, setDispatcherNotes] = useState<string>("");
   
+  // District Filter State
+  const [selectedDistrict, setSelectedDistrict] = useState<string>("ALL");
+  const availableDistricts = ["ALL", ...Array.from(new Set(Object.values(incidents).map(i => i.district).filter(Boolean) as string[]))];
+
   // Auth State
   const [token, setToken] = useState<string | null>(null);
   const [username, setUsername] = useState<string>("");
@@ -69,7 +74,7 @@ export default function Home() {
       }
     });
 
-    // Listen for new or updated incident locations
+    // Listen for new or updated incident locations (Immediate zero-latency broadcast)
     newSocket.on("incident_location_updated", (payload: any) => {
       setIncidents((prev) => {
         // If it's a completely new incident, default status to ACTIVE
@@ -77,6 +82,17 @@ export default function Home() {
         return {
           ...prev,
           [payload.incidentId]: { ...payload, status: existingStatus },
+        };
+      });
+    });
+
+    // Listen for asynchronous district resolution
+    newSocket.on("incident_district_resolved", (payload: { incidentId: string, district: string }) => {
+      setIncidents((prev) => {
+        if (!prev[payload.incidentId]) return prev;
+        return {
+          ...prev,
+          [payload.incidentId]: { ...prev[payload.incidentId], district: payload.district },
         };
       });
     });
@@ -133,8 +149,11 @@ export default function Home() {
     }
   };
 
-  // Convert dictionary to array and sort newest first
-  const incidentList = Object.values(incidents).sort((a, b) => b.timestamp - a.timestamp);
+  // Convert dictionary to array, filter by district, and sort newest first
+  const incidentList = Object.values(incidents)
+    .filter(i => selectedDistrict === "ALL" || i.district === selectedDistrict)
+    .sort((a, b) => b.timestamp - a.timestamp);
+    
   const selectedIncident = selectedIncidentId ? incidents[selectedIncidentId] : null;
 
   if (!token) {
@@ -183,6 +202,21 @@ export default function Home() {
           <div className={styles.pulseDot}></div>
           <h1>Offline Guardian // <span className={styles.subtitle}>Master Control</span></h1>
         </div>
+        
+        {/* District Filter Dropdown */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginLeft: 'auto', marginRight: '2rem' }}>
+          <span style={{ color: '#888', fontSize: '0.9rem' }}>Jurisdiction:</span>
+          <select 
+            value={selectedDistrict}
+            onChange={(e) => setSelectedDistrict(e.target.value)}
+            style={{ padding: '0.5rem', background: '#111', color: 'white', border: '1px solid #333', borderRadius: '4px' }}
+          >
+            {availableDistricts.map(dist => (
+              <option key={dist} value={dist}>{dist}</option>
+            ))}
+          </select>
+        </div>
+
         <div className={styles.status}>
           <span className={styles.statusOnline}>SYSTEM SECURE</span>
           <span className={styles.time}>{time}</span>
@@ -195,7 +229,7 @@ export default function Home() {
           <h2>Active Area Monitoring</h2>
           <p>Listening for Tier 1 Online & Tier 3 Mesh relay packets...</p>
         </div>
-        <MapComponent incidents={incidents} />
+        <MapComponent incidents={incidents} selectedIncidentId={selectedIncidentId} />
       </div>
 
       {/* Instagram-style Incident Queue */}
@@ -204,7 +238,7 @@ export default function Home() {
         
         {incidentList.length === 0 ? (
           <div className={styles.emptyState}>
-            Waiting for SOS trigger...
+            Waiting for SOS trigger in {selectedDistrict === "ALL" ? "all districts" : selectedDistrict}...
           </div>
         ) : (
           <div className={styles.queueContainer}>
@@ -228,6 +262,9 @@ export default function Home() {
                     <span className={incident.status === 'ACTIVE' ? styles.statusActiveText : styles.statusAnsweredText}>
                       {incident.status}
                     </span>
+                    {incident.district && (
+                      <span style={{ color: '#aaa', marginLeft: '0.5rem', fontSize: '0.75rem' }}> • {incident.district}</span>
+                    )}
                     {incident.trustStatus === 'NEEDS_REVIEW' && (
                       <span className={styles.flagWarning}> • FLAGGED</span>
                     )}
@@ -244,6 +281,9 @@ export default function Home() {
             <h4>Take Information</h4>
             <div className={styles.infoRow}>
               <span>Device:</span> {selectedIncident.deviceUuid.substring(0,8)}
+            </div>
+            <div className={styles.infoRow}>
+              <span>District:</span> {selectedIncident.district || "Resolving..."}
             </div>
             <div className={styles.infoRow}>
               <span>Battery:</span> {selectedIncident.battery}%

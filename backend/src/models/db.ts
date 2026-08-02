@@ -59,6 +59,7 @@ export const initDb = async () => {
         legal_hold_expires_at TIMESTAMP,
         legal_hold_set_by UUID REFERENCES dispatchers(id),
         legal_hold_set_at TIMESTAMP,
+        district VARCHAR(100), -- Populated asynchronously via reverse-geocoding
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );

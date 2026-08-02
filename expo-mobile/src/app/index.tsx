@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, ScrollView, Image, Dimensions } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, ScrollView, Image, Dimensions, Vibration } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import * as Location from 'expo-location';
@@ -20,7 +20,6 @@ const SERVER_URL = 'https://tn-safety-app.onrender.com';
 export default function HomeScreen() {
   const [socket, setSocket] = useState<any>(null);
   const [isAlertActive, setIsAlertActive] = useState(false);
-  const [isSOSActive, setIsSOSActive] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   // Pulse animation values
@@ -80,16 +79,13 @@ export default function HomeScreen() {
   });
 
   const triggerSOS = async () => {
+    if (isAlertActive) return; // Prevent multiple triggers
+
     // Button press animation
     buttonScale.value = withSequence(
       withTiming(0.9, { duration: 100 }),
       withTiming(1, { duration: 100 })
     );
-
-    if (isAlertActive) {
-      setIsAlertActive(false);
-      return;
-    }
 
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -99,6 +95,10 @@ export default function HomeScreen() {
       }
 
       setIsAlertActive(true);
+      
+      // Silent Haptic Feedback (Two quick pulses: 100ms vibrate, 100ms pause, 100ms vibrate)
+      Vibration.vibrate([0, 100, 100, 100]);
+
       let location = await Location.getCurrentPositionAsync({});
       
       // Emit SOS alert to the Node.js backend
@@ -164,9 +164,9 @@ export default function HomeScreen() {
             <Animated.View style={[styles.pulseRing, animatedPulseStyle]} />
           )}
           
-          <TouchableOpacity activeOpacity={0.9} onPress={triggerSOS}>
+          <TouchableOpacity activeOpacity={0.9} onLongPress={triggerSOS} delayLongPress={1500}>
             <Animated.View style={[styles.sosButton, animatedButtonStyle, isAlertActive && styles.sosButtonActive]}>
-              <Text style={styles.sosText}>{isAlertActive ? 'CANCEL' : 'SOS'}</Text>
+              <Text style={styles.sosText}>{isAlertActive ? 'ACTIVE' : 'SOS'}</Text>
             </Animated.View>
           </TouchableOpacity>
         </View>
@@ -174,7 +174,7 @@ export default function HomeScreen() {
         <Text style={styles.statusText}>
           {isAlertActive 
             ? 'Alert sent to Trusted Contacts & Control Room.' 
-            : 'Tap the button if you are in danger.'}
+            : 'Press and hold for 1.5 seconds if you are in danger.'}
         </Text>
       </View>
     </SafeAreaView>
