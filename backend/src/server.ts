@@ -246,20 +246,20 @@ io.on('connection', (socket) => {
     console.log('SOS CANCELLED BY PHONE:', payload);
     const incidentId = 'GLOBAL_TEST_INCIDENT'; // For pilot demo, we use the global ID
 
+    // 1. Instantly notify the dashboard (Zero Latency)
+    io.to(incidentId).emit('incident_status_changed', { 
+      incidentId, 
+      status: 'CANCELLED_BY_USER', 
+      notes: 'Alarm disarmed securely from the device.' 
+    });
+
+    // 2. Fire-and-forget DB update
     try {
-      // Update DB to mark as cancelled by user
       await pool.query(`
         UPDATE incidents 
         SET status = 'CANCELLED_BY_USER', updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
       `, [incidentId]);
-
-      // Immediately notify the dashboard
-      io.to(incidentId).emit('incident_status_changed', { 
-        incidentId, 
-        status: 'CANCELLED_BY_USER', 
-        notes: 'Alarm disarmed securely from the device.' 
-      });
     } catch (e) {
       console.error('Failed to cancel incident in DB:', e);
     }
