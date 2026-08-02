@@ -422,6 +422,19 @@ io.on('connection', (socket) => {
       console.error('Failed to insert AUTO_HELD state (DB might be offline during testing)', e);
     }
     
+    // Fetch the sender's civilian profile to send to dashboard and trusted contacts
+    let senderProfile = null;
+    if (payload.senderPhone) {
+      try {
+        const profileResult = await pool.query('SELECT * FROM civilian_profiles WHERE phone_number = $1', [payload.senderPhone]);
+        if (profileResult.rows.length > 0) {
+          senderProfile = profileResult.rows[0];
+        }
+      } catch (e) {
+        console.error('Failed to fetch civilian profile for dashboard broadcast', e);
+      }
+    }
+
     // 1. Instantly notify the dashboard (Zero Latency)
     const broadcastPayload = { 
       deviceUuid: payload.userId, 
@@ -430,7 +443,8 @@ io.on('connection', (socket) => {
       lng: payload.longitude,
       timestamp: payload.timestamp || new Date().toISOString(),
       trustStatus: 'ACTIVE',
-      district: null // Set to null initially
+      district: null, // Set to null initially
+      senderProfile: senderProfile // Attach the civilian profile for the web dashboard!
     };
     io.to(incidentId).emit('incident_location_updated', broadcastPayload);
 
@@ -471,15 +485,6 @@ io.on('connection', (socket) => {
     // 2.5. Dispatch to Civilian Trusted Contacts (Peer-to-Peer Routing)
     try {
       if (payload.trustedContacts && Array.isArray(payload.trustedContacts)) {
-        // Fetch the sender's civilian profile to send along with the alert
-        let senderProfile = null;
-        if (payload.senderPhone) {
-          const profileResult = await pool.query('SELECT * FROM civilian_profiles WHERE phone_number = $1', [payload.senderPhone]);
-          if (profileResult.rows.length > 0) {
-            senderProfile = profileResult.rows[0];
-          }
-        }
-
         const civilianPayload = {
           incidentId: incidentId,
           lat: payload.latitude,
