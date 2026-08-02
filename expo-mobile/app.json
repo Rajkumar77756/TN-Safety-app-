@@ -47,6 +47,14 @@
           ],
           "bluetoothAlwaysPermission": "Allow Thunai to securely detect nearby Bluetooth devices to relay offline SOS signals."
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": false
+          }
+        }
       ]
     ],
     "experiments": {
