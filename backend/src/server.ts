@@ -205,6 +205,7 @@ io.on('connection', (socket) => {
       incidentId: incidentId, 
       lat: payload.latitude, 
       lng: payload.longitude,
+      timestamp: payload.timestamp || new Date().toISOString(),
       trustStatus: 'ACTIVE',
       district: null // Set to null initially
     };
