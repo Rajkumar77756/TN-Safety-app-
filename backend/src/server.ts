@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
+import cors from 'cors';
 import authRouter from './auth';
 import { initDb, pool } from './models/db';
 import { checkDeviceStatus } from './abuse-prevention';
@@ -20,6 +21,8 @@ const io = new Server(httpServer, {
   }
 });
 
+// Enable CORS for standard HTTP endpoints (like /api/dispatcher/login)
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 // Routes
