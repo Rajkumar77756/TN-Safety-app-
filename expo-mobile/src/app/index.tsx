@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, ScrollView, Image, Dimensions, Vibration } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, ScrollView, Image, Dimensions, Vibration, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle, 
@@ -13,14 +14,25 @@ import Animated, {
 } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
-
-// Connects to the Node.js backend exposed publicly via Localtunnel
 const SERVER_URL = 'https://tn-safety-app.onrender.com';
+
+interface Contact {
+  id: string;
+  name: string;
+  phone: string;
+  image: string;
+}
 
 export default function HomeScreen() {
   const [socket, setSocket] = useState<any>(null);
   const [isAlertActive, setIsAlertActive] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+
+  // Contacts State
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
 
   // Pulse animation values
   const pulseScale = useSharedValue(1);
@@ -28,36 +40,62 @@ export default function HomeScreen() {
   const buttonScale = useSharedValue(1);
 
   useEffect(() => {
-    // Connect to Socket.io backend with localtunnel bypass header
+    loadContacts();
+
+    // Connect to Socket.io backend
     const newSocket = io(SERVER_URL, {
-      extraHeaders: {
-        'Bypass-Tunnel-Reminder': 'true'
-      }
+      extraHeaders: { 'Bypass-Tunnel-Reminder': 'true' }
     });
     
-    newSocket.on('connect', () => {
-      console.log('Connected to server');
-    });
-
+    newSocket.on('connect', () => console.log('Connected to server'));
     setSocket(newSocket);
 
-    return () => {
-      newSocket.disconnect();
-    };
+    return () => newSocket.disconnect();
   }, []);
+
+  const loadContacts = async () => {
+    try {
+      const savedContacts = await AsyncStorage.getItem('@trusted_contacts');
+      if (savedContacts) {
+        setContacts(JSON.parse(savedContacts));
+      }
+    } catch (e) {
+      console.error('Failed to load contacts', e);
+    }
+  };
+
+  const saveContact = async () => {
+    if (!newName.trim() || !newPhone.trim()) return;
+    
+    const newContact: Contact = {
+      id: Date.now().toString(),
+      name: newName,
+      phone: newPhone,
+      image: `https://ui-avatars.com/api/?name=${encodeURIComponent(newName)}&background=random`
+    };
+
+    const updatedContacts = [...contacts, newContact];
+    try {
+      await AsyncStorage.setItem('@trusted_contacts', JSON.stringify(updatedContacts));
+      setContacts(updatedContacts);
+      setIsModalVisible(false);
+      setNewName('');
+      setNewPhone('');
+    } catch (e) {
+      console.error('Failed to save contact', e);
+    }
+  };
 
   // Pulse effect when alert is active
   useEffect(() => {
     if (isAlertActive) {
       pulseScale.value = withRepeat(
         withTiming(2, { duration: 1500, easing: Easing.out(Easing.ease) }),
-        -1, // Infinite repeat
-        false
+        -1, false
       );
       pulseOpacity.value = withRepeat(
         withTiming(0, { duration: 1500, easing: Easing.out(Easing.ease) }),
-        -1,
-        false
+        -1, false
       );
     } else {
       pulseScale.value = 1;
@@ -65,23 +103,18 @@ export default function HomeScreen() {
     }
   }, [isAlertActive]);
 
-  const animatedPulseStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: pulseScale.value }],
-      opacity: pulseOpacity.value,
-    };
-  });
+  const animatedPulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulseScale.value }],
+    opacity: pulseOpacity.value,
+  }));
 
-  const animatedButtonStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: buttonScale.value }],
-    };
-  });
+  const animatedButtonStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: buttonScale.value }],
+  }));
 
   const triggerSOS = async () => {
     if (isAlertActive) return; // Prevent multiple triggers
 
-    // Button press animation
     buttonScale.value = withSequence(
       withTiming(0.9, { duration: 100 }),
       withTiming(1, { duration: 100 })
@@ -96,12 +129,11 @@ export default function HomeScreen() {
 
       setIsAlertActive(true);
       
-      // Silent Haptic Feedback (Two quick pulses: 100ms vibrate, 100ms pause, 100ms vibrate)
+      // Silent Haptic Feedback (Two quick pulses)
       Vibration.vibrate([0, 100, 100, 100]);
 
       let location = await Location.getCurrentPositionAsync({});
       
-      // Emit SOS alert to the Node.js backend
       if (socket) {
         socket.emit('sos-alert', {
           userId: 'user_123',
@@ -116,13 +148,14 @@ export default function HomeScreen() {
     }
   };
 
-  // Dummy trusted contacts for the Instagram-style top row
-  const trustedContacts = [
-    { id: 1, name: 'Mom', image: 'https://ui-avatars.com/api/?name=Mom&background=random' },
-    { id: 2, name: 'Dad', image: 'https://ui-avatars.com/api/?name=Dad&background=random' },
-    { id: 3, name: 'Brother', image: 'https://ui-avatars.com/api/?name=Brother&background=random' },
-    { id: 4, name: 'Police', image: 'https://ui-avatars.com/api/?name=Police&background=random' },
-  ];
+  const disarmSOS = () => {
+    if (!isAlertActive) return;
+    Vibration.vibrate(100); // Small haptic to confirm disarm
+    setIsAlertActive(false);
+    if (socket) {
+      socket.emit('cancel-sos', { userId: 'user_123' });
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -135,17 +168,17 @@ export default function HomeScreen() {
       <View style={styles.storiesContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storiesScroll}>
           {/* Add New Contact Button */}
-          <View style={styles.storyWrapper}>
+          <TouchableOpacity style={styles.storyWrapper} onPress={() => setIsModalVisible(true)}>
             <View style={[styles.storyRing, styles.addStoryRing]}>
               <View style={styles.addIconContainer}>
                 <Text style={styles.addIcon}>+</Text>
               </View>
             </View>
             <Text style={styles.storyName}>Add Contact</Text>
-          </View>
+          </TouchableOpacity>
 
           {/* Trusted Contacts */}
-          {trustedContacts.map(contact => (
+          {contacts.map(contact => (
             <View key={contact.id} style={styles.storyWrapper}>
               <View style={styles.storyRing}>
                 <Image source={{ uri: contact.image }} style={styles.storyImage} />
@@ -159,7 +192,6 @@ export default function HomeScreen() {
       {/* Center Feed (SOS Button) */}
       <View style={styles.feedContainer}>
         <View style={styles.sosWrapper}>
-          {/* Pulsing Background Rings */}
           {isAlertActive && (
             <Animated.View style={[styles.pulseRing, animatedPulseStyle]} />
           )}
@@ -177,6 +209,50 @@ export default function HomeScreen() {
             : 'Press and hold for 1.5 seconds if you are in danger.'}
         </Text>
       </View>
+
+      {/* Subtle Disarm System Button */}
+      {isAlertActive && (
+        <View style={styles.disarmContainer}>
+          <TouchableOpacity onLongPress={disarmSOS} delayLongPress={3000}>
+            <Text style={styles.disarmText}>Disarm System (Hold 3s)</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Add Contact Modal */}
+      <Modal visible={isModalVisible} animationType="slide" transparent={true}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Add Trusted Contact</Text>
+            
+            <TextInput
+              style={styles.input}
+              placeholder="Name (e.g. Mom)"
+              placeholderTextColor="#666"
+              value={newName}
+              onChangeText={setNewName}
+            />
+            
+            <TextInput
+              style={styles.input}
+              placeholder="Phone Number"
+              placeholderTextColor="#666"
+              keyboardType="phone-pad"
+              value={newPhone}
+              onChangeText={setNewPhone}
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setIsModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveBtn} onPress={saveContact}>
+                <Text style={styles.saveBtnText}>Save Contact</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -184,7 +260,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000', // Instagram Dark Mode Black
+    backgroundColor: '#000000', 
   },
   header: {
     paddingHorizontal: 20,
@@ -194,11 +270,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 28,
     fontWeight: 'bold',
-    fontStyle: 'italic', // Stylized like Instagram logo
+    fontStyle: 'italic',
   },
   storiesContainer: {
     borderBottomWidth: 0.5,
-    borderBottomColor: '#262626', // Dark gray border
+    borderBottomColor: '#262626',
     paddingBottom: 15,
   },
   storiesScroll: {
@@ -214,13 +290,13 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 36,
     borderWidth: 2,
-    borderColor: '#ff0050', // Safety Red/Pink gradient style
+    borderColor: '#ff0050',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 2,
   },
   addStoryRing: {
-    borderColor: '#262626', // Dimmed out for the add button
+    borderColor: '#262626',
   },
   storyImage: {
     width: 64,
@@ -294,5 +370,70 @@ const styles = StyleSheet.create({
     marginTop: 40,
     textAlign: 'center',
     paddingHorizontal: 20,
+  },
+  disarmContainer: {
+    padding: 30,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  disarmText: {
+    color: '#333333', // Very dark grey so it's barely noticeable to an attacker
+    fontSize: 14,
+  },
+  // Modal Styles
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  modalContent: {
+    backgroundColor: '#1c1c1c',
+    padding: 25,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  modalTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 20,
+  },
+  input: {
+    backgroundColor: '#000000',
+    color: '#FFFFFF',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  cancelBtn: {
+    padding: 15,
+    borderRadius: 10,
+    flex: 1,
+    marginRight: 10,
+    backgroundColor: '#333',
+    alignItems: 'center',
+  },
+  cancelBtnText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+  saveBtn: {
+    padding: 15,
+    borderRadius: 10,
+    flex: 1,
+    marginLeft: 10,
+    backgroundColor: '#ff0050',
+    alignItems: 'center',
+  },
+  saveBtnText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
   }
 });

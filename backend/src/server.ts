@@ -240,6 +240,30 @@ io.on('connection', (socket) => {
     })();
   });
 
+  // Handle Secure Disarm / Cancel from Mobile App
+  socket.on('cancel-sos', async (payload) => {
+    console.log('SOS CANCELLED BY PHONE:', payload);
+    const incidentId = 'GLOBAL_TEST_INCIDENT'; // For pilot demo, we use the global ID
+
+    try {
+      // Update DB to mark as cancelled by user
+      await pool.query(`
+        UPDATE incidents 
+        SET status = 'CANCELLED_BY_USER', updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `, [incidentId]);
+
+      // Immediately notify the dashboard
+      io.to(incidentId).emit('incident_status_changed', { 
+        incidentId, 
+        status: 'CANCELLED_BY_USER', 
+        notes: 'Alarm disarmed securely from the device.' 
+      });
+    } catch (e) {
+      console.error('Failed to cancel incident in DB:', e);
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
   });

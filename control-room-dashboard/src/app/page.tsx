@@ -19,10 +19,21 @@ export interface Incident {
   battery: number;
   timestamp: number;
   trustStatus: string;
-  status: 'ACTIVE' | 'ANSWERED';
+  status: 'ACTIVE' | 'ANSWERED' | 'CANCELLED_BY_USER';
 }
 
 const SERVER_URL = "https://tn-safety-app.onrender.com";
+
+const TAMIL_NADU_DISTRICTS = [
+  "Ariyalur", "Chengalpattu", "Chennai", "Coimbatore", "Cuddalore",
+  "Dharmapuri", "Dindigul", "Erode", "Kallakurichi", "Kanchipuram",
+  "Kanyakumari", "Karur", "Krishnagiri", "Madurai", "Mayiladuthurai",
+  "Nagapattinam", "Namakkal", "Nilgiris", "Perambalur", "Pudukkottai",
+  "Ramanathapuram", "Ranipet", "Salem", "Sivaganga", "Tenkasi",
+  "Thanjavur", "Theni", "Thoothukudi", "Tiruchirappalli", "Tirunelveli",
+  "Tirupathur", "Tiruppur", "Tiruvallur", "Tiruvannamalai", "Tiruvarur",
+  "Vellore", "Viluppuram", "Virudhunagar"
+];
 
 export default function Home() {
   const [time, setTime] = useState<string>("");
@@ -33,7 +44,7 @@ export default function Home() {
   
   // District Filter State
   const [selectedDistrict, setSelectedDistrict] = useState<string>("ALL");
-  const availableDistricts = ["ALL", ...Array.from(new Set(Object.values(incidents).map(i => i.district).filter(Boolean) as string[]))];
+  const availableDistricts = ["ALL", ...TAMIL_NADU_DISTRICTS];
 
   // Auth State
   const [token, setToken] = useState<string | null>(null);
@@ -97,8 +108,8 @@ export default function Home() {
       });
     });
 
-    // Listen for status changes (e.g. marked as answered by another dispatcher)
-    newSocket.on("incident_status_changed", (payload: { incidentId: string, status: 'ACTIVE' | 'ANSWERED', notes: string }) => {
+    // Listen for status changes (e.g. marked as answered by another dispatcher, or cancelled by user)
+    newSocket.on("incident_status_changed", (payload: { incidentId: string, status: 'ACTIVE' | 'ANSWERED' | 'CANCELLED_BY_USER', notes: string }) => {
       setIncidents((prev) => {
         if (!prev[payload.incidentId]) return prev;
         return {
@@ -106,7 +117,7 @@ export default function Home() {
           [payload.incidentId]: { ...prev[payload.incidentId], status: payload.status },
         };
       });
-      if (payload.status === 'ANSWERED') {
+      if (payload.status === 'ANSWERED' || payload.status === 'CANCELLED_BY_USER') {
         setSelectedIncidentId(null);
       }
     });
