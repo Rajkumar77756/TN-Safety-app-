@@ -23,3 +23,20 @@ index 2526548..c8a157b 100644
          versionCode 1
          versionName "1.0"
      }
+diff --git a/node_modules/react-native-ble-advertiser/android/src/main/java/com/vitorpamplona/bleadvertiser/BLEAdvertiserModule.java b/node_modules/react-native-ble-advertiser/android/src/main/java/com/vitorpamplona/bleadvertiser/BLEAdvertiserModule.java
+index 036de18..5d4f8f4 100644
+--- a/node_modules/react-native-ble-advertiser/android/src/main/java/com/vitorpamplona/bleadvertiser/BLEAdvertiserModule.java
++++ b/node_modules/react-native-ble-advertiser/android/src/main/java/com/vitorpamplona/bleadvertiser/BLEAdvertiserModule.java
+@@ -76,7 +76,11 @@ public class BLEAdvertiserModule extends ReactContextBaseJavaModule {
+         this.companyId = 0x0000;
+ 
+         IntentFilter filter = new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED);
+-        reactContext.registerReceiver(mReceiver, filter);
++        if (Build.VERSION.SDK_INT >= 34) {
++            reactContext.registerReceiver(mReceiver, filter, 2); // RECEIVER_EXPORTED
++        } else {
++            reactContext.registerReceiver(mReceiver, filter);
++        }
+     }
+     
+     @Override
