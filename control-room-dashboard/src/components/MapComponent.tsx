@@ -74,10 +74,12 @@ export default function MapComponent({ incidents, selectedIncidentId }: MapProps
         {activeIncidentList.map((incident) => {
           const isFlagged = incident.trustStatus === "NEEDS_REVIEW";
           const isAnswered = incident.status === "ANSWERED";
+          const isCancelled = incident.status === "CANCELLED_BY_USER";
           
           let circleColor = "#ff4444"; // Active (Red)
           if (isFlagged) circleColor = "#f5a623"; // Flagged (Orange)
           if (isAnswered) circleColor = "#00ff00"; // Answered (Green)
+          if (isCancelled) circleColor = "#555555"; // Cancelled/Offline (Grey)
 
           return (
             <div key={incident.incidentId}>
@@ -87,7 +89,7 @@ export default function MapComponent({ incidents, selectedIncidentId }: MapProps
                 pathOptions={{
                   color: circleColor,
                   fillColor: circleColor,
-                  fillOpacity: isAnswered ? 0.2 : 0.4 // Dim opacity if answered
+                  fillOpacity: (isAnswered || isCancelled) ? 0.2 : 0.4 // Dim opacity if inactive
                 }}
               />
               <Marker position={[incident.lat, incident.lng]}>

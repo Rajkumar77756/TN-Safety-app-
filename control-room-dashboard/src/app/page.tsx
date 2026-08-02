@@ -270,13 +270,18 @@ export default function Home() {
                     <span className={styles.queueTime}>{new Date(incident.timestamp).toLocaleTimeString()}</span>
                   </div>
                   <div className={styles.incidentSub}>
-                    <span className={incident.status === 'ACTIVE' ? styles.statusActiveText : styles.statusAnsweredText}>
-                      {incident.status}
+                    <span style={{
+                      color: incident.status === 'ACTIVE' ? '#ff4d4f' : 
+                             incident.status === 'CANCELLED_BY_USER' ? '#555555' : '#00ff00',
+                      fontWeight: 'bold',
+                      fontSize: '0.8rem'
+                    }}>
+                      {incident.status === 'CANCELLED_BY_USER' ? 'OFFLINE (DISARMED)' : incident.status}
                     </span>
                     {incident.district && (
                       <span style={{ color: '#aaa', marginLeft: '0.5rem', fontSize: '0.75rem' }}> • {incident.district}</span>
                     )}
-                    {incident.trustStatus === 'NEEDS_REVIEW' && (
+                    {incident.trustStatus === 'NEEDS_REVIEW' && incident.status === 'ACTIVE' && (
                       <span className={styles.flagWarning}> • FLAGGED</span>
                     )}
                   </div>
