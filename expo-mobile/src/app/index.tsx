@@ -74,7 +74,7 @@ export default function HomeScreen() {
       const hasPermission = await requestBluetoothPermissions();
       if (hasPermission) {
         // Start listening for Mesh SOS broadcasts from victims around you
-        startBackgroundRelayScanner();
+        startBackgroundRelayScanner(SERVER_URL);
       } else {
         console.warn('Bluetooth permissions denied, cannot run mesh scanner.');
       }

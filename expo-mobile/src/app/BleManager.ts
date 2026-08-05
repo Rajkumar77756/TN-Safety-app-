@@ -1,10 +1,47 @@
-import { BleManager } from 'react-native-ble-plx';
-import BLEAdvertiser from 'react-native-ble-advertiser';
 import { Platform, PermissionsAndroid } from 'react-native';
-import { SERVER_URL } from './index';
 
-// Initialize the BLE PLX Manager for scanning lazily to prevent startup crashes
-export let bleManager: BleManager | null = null;
+// CRITICAL: Do NOT import native BLE modules at the top level.
+// Top-level imports force the JS engine to evaluate the native module binding
+// during bundle load. If the native module crashes during registration
+// (e.g., the registerReceiver SecurityException), the entire JS bundle
+// fails to load — no ErrorBoundary, no ErrorUtils, nothing catches it.
+// Instead, we use lazy dynamic requires that only execute when BLE is actually needed.
+
+let _BleManager: any = null;
+let _BLEAdvertiser: any = null;
+let _bleManagerInstance: any = null;
+
+function getBleManager() {
+  if (!_BleManager) {
+    try {
+      _BleManager = require('react-native-ble-plx').BleManager;
+    } catch (e) {
+      console.error('[BLE] Failed to load react-native-ble-plx:', e);
+      return null;
+    }
+  }
+  if (!_bleManagerInstance) {
+    try {
+      _bleManagerInstance = new _BleManager();
+    } catch (e) {
+      console.error('[BLE] Failed to create BleManager instance:', e);
+      return null;
+    }
+  }
+  return _bleManagerInstance;
+}
+
+function getBLEAdvertiser() {
+  if (!_BLEAdvertiser) {
+    try {
+      _BLEAdvertiser = require('react-native-ble-advertiser').default;
+    } catch (e) {
+      console.error('[BLE] Failed to load react-native-ble-advertiser:', e);
+      return null;
+    }
+  }
+  return _BLEAdvertiser;
+}
 
 // Unique 128-bit UUID for the Thunai SOS Service
 export const THUNAI_SOS_SERVICE_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
@@ -57,8 +94,6 @@ function encodeSosPayload(userId: string, lat: number, lng: number): number[] {
 
 /**
  * START BLE BROADCASTING (VICTIM MODE)
- * Uses the phone's Bluetooth chip to broadcast an encrypted SOS payload
- * to any nearby devices when there is no internet connection.
  */
 export const startOfflineSosBroadcast = async (payload: { userId: string, lat: number, lng: number, senderPhone: string | null }) => {
   try {
@@ -68,17 +103,20 @@ export const startOfflineSosBroadcast = async (payload: { userId: string, lat: n
       return;
     }
 
+    const advertiser = getBLEAdvertiser();
+    if (!advertiser) {
+      console.warn('[BLE] BLE Advertiser module not available on this device.');
+      return;
+    }
+
     console.log('[BLE] Starting Offline SOS Broadcast...');
     
-    // Encode the victim's critical data into a 16-byte binary payload
     const packedBytes = encodeSosPayload(payload.userId, payload.lat, payload.lng);
     
-    // Set up the BLE Advertiser
-    BLEAdvertiser.setCompanyId(0xFFFF); // Use testing company ID
+    advertiser.setCompanyId(0xFFFF);
     
     if (Platform.OS === 'android') {
-      // Broadcast the custom 16-byte emergency payload in the Manufacturer Data
-      await BLEAdvertiser.broadcast(THUNAI_SOS_SERVICE_UUID, packedBytes, {
+      await advertiser.broadcast(THUNAI_SOS_SERVICE_UUID, packedBytes, {
         includeDeviceName: false,
         includeTxPowerLevel: true,
       });
@@ -93,8 +131,11 @@ export const startOfflineSosBroadcast = async (payload: { userId: string, lat: n
 
 export const stopOfflineSosBroadcast = async () => {
   try {
-    await BLEAdvertiser.stopBroadcast();
-    console.log('[BLE] Stopped Broadcast');
+    const advertiser = getBLEAdvertiser();
+    if (advertiser) {
+      await advertiser.stopBroadcast();
+      console.log('[BLE] Stopped Broadcast');
+    }
   } catch (err) {
     console.error('[BLE] Failed to stop broadcast', err);
   }
@@ -102,53 +143,48 @@ export const stopOfflineSosBroadcast = async () => {
 
 /**
  * START BLE SCANNER (RELAY MODE)
- * Runs in the background continuously listening for Thunai SOS broadcasts.
- * If it hears one, it uses the relay phone's internet to send it to the police.
  */
-export const startBackgroundRelayScanner = () => {
+export const startBackgroundRelayScanner = (serverUrl: string) => {
   try {
     console.log('[BLE] Starting Background Relay Scanner...');
     
-    if (!bleManager) {
-      bleManager = new BleManager();
+    const manager = getBleManager();
+    if (!manager) {
+      console.warn('[BLE] BLE Scanner module not available on this device.');
+      return;
     }
     
-    bleManager.startDeviceScan([THUNAI_SOS_SERVICE_UUID], { allowDuplicates: false }, async (error, device) => {
+    manager.startDeviceScan([THUNAI_SOS_SERVICE_UUID], { allowDuplicates: false }, async (error: any, device: any) => {
       if (error) {
         console.error('[BLE] Scan error', error);
         return;
       }
 
-    if (device) {
-      console.log(`[BLE] Detected SOS Signal from Device ID: ${device.id}`);
-      
-      // Stop scanning temporarily while we relay to prevent spam
-      if (bleManager) {
-        bleManager.stopDeviceScan();
+      if (device) {
+        console.log(`[BLE] Detected SOS Signal from Device ID: ${device.id}`);
+        
+        if (manager) {
+          manager.stopDeviceScan();
+        }
+        
+        try {
+          await fetch(`${serverUrl}/api/mesh/relay`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              relayDeviceId: 'anonymous_relay_node',
+              encryptedPayload: 'MOCKED_ENCRYPTED_PAYLOAD_FROM_BLE_MAC_' + device.id
+            })
+          });
+          console.log('[BLE] Successfully relayed SOS packet to Cloud Backend!');
+        } catch (err) {
+          console.error('[BLE] Failed to relay packet. Internet might be down.', err);
+        }
+        
+        setTimeout(() => startBackgroundRelayScanner(serverUrl), 10000);
       }
-      
-      // In a real implementation, extract the Manufacturer Data payload and relay it
-      try {
-        await fetch(`${SERVER_URL}/api/mesh/relay`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            relayDeviceId: 'anonymous_relay_node',
-            // Mock payload for the pilot demonstration
-            encryptedPayload: 'MOCKED_ENCRYPTED_PAYLOAD_FROM_BLE_MAC_' + device.id
-          })
-        });
-        console.log('[BLE] Successfully relayed SOS packet to Cloud Backend!');
-      } catch (err) {
-        console.error('[BLE] Failed to relay packet. Internet might be down.', err);
-      }
-      
-      // Resume scanning after a cooldown
-      setTimeout(() => startBackgroundRelayScanner(), 10000);
-    }
-  });
+    });
   } catch (err) {
     console.error('[BLE] Native Module Crash: Failed to start relay scanner', err);
-    // Graceful failure - disable mesh for this session instead of crashing
   }
 };
