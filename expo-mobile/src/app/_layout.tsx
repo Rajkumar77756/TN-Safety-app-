@@ -1,5 +1,20 @@
 import { Stack } from 'expo-router';
-import { View, Text, ScrollView, SafeAreaView } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, Alert } from 'react-native';
+
+// CLAUDE'S RECOMMENDATION: Catch fatal JS errors before React even mounts
+if (global.ErrorUtils) {
+  const defaultErrorHandler = global.ErrorUtils.getGlobalHandler();
+  global.ErrorUtils.setGlobalHandler((error, isFatal) => {
+    if (isFatal) {
+      Alert.alert(
+        'FATAL JS ERROR (Pre-React)',
+        `${error.name}: ${error.message}\n\n${error.stack}`,
+        [{ text: 'OK' }]
+      );
+    }
+    defaultErrorHandler(error, isFatal);
+  });
+}
 
 export function ErrorBoundary({ error, retry }: { error: Error; retry: () => void }) {
   return (
