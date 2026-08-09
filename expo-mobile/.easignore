@@ -1,0 +1,12 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.kotlin/
+.git/
+/android/
+/ios/
+assets/videos/
+*.apk
+*.aab
+*.jks

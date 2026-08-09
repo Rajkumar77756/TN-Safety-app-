@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.KeyEvent
 import android.os.Handler
 import android.os.Looper
 
@@ -47,6 +48,21 @@ class StealthModeAccessibilityService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (!isStealthModeEnabled) return super.onKeyEvent(event)
+        
+        if (event.keyCode == KeyEvent.KEYCODE_POWER) {
+            Log.d(TAG, "Intercepted Hardware Power Button: ${event.action}")
+            if (event.action == KeyEvent.ACTION_UP) {
+                // Instantly show the fake power menu
+                triggerFakePowerMenu()
+            }
+            // Return true to SWALLOW the event so the Android OS never receives the power button press!
+            return true
+        }
+        return super.onKeyEvent(event)
     }
 
     private fun triggerFakePowerMenu() {
