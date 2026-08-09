@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, NativeModules, Alert } from 'react-native';
-
-const { ExpoStealthMode } = NativeModules;
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import ExpoStealthMode from '../../modules/expo-stealth-mode/src/ExpoStealthModeModule';
 
 export default function StealthSettings() {
   const [isActive, setIsActive] = useState(false);
@@ -15,27 +14,27 @@ export default function StealthSettings() {
   };
 
   const handleOpenAccessibility = () => {
-    if (ExpoStealthMode) {
+    try {
       ExpoStealthMode.openAccessibilitySettings();
-    } else {
-      Alert.alert('Emulator Mode', 'This button opens native Android accessibility settings. Since you are using Expo Go on the emulator without compiling the native Kotlin code, this native setting cannot be opened here.');
+    } catch (e) {
+      Alert.alert('Error', 'Could not open accessibility settings. Ensure the native module is compiled.');
     }
   };
 
   const handleOpenOverlay = () => {
-    if (ExpoStealthMode) {
+    try {
       ExpoStealthMode.openOverlaySettings();
-    } else {
-      Alert.alert('Emulator Mode', 'This button opens native Android overlay settings. Since you are using Expo Go on the emulator, this native setting cannot be opened here.');
+    } catch (e) {
+      Alert.alert('Error', 'Could not open overlay settings.');
     }
   };
 
   const toggleStealthMode = () => {
-    if (ExpoStealthMode) {
+    try {
       ExpoStealthMode.setStealthModeActive(true);
       alert('Stealth Mode Activated! If someone holds the power button, the fake shutdown screen will appear.');
-    } else {
-      Alert.alert('Emulator Mode', 'Stealth Mode requires native Kotlin background services, which cannot run inside the Expo Go app. The UI works, but the native background task is disabled in this mode.');
+    } catch (e) {
+      Alert.alert('Error', 'Stealth Mode requires native Kotlin background services. Make sure you are running the compiled APK.');
     }
   };
 
