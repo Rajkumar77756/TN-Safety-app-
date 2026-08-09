@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Required for Thunai Stealth Mode to protect your device during emergencies by displaying a secure lock screen when power off is attempted.</string>
+</resources>

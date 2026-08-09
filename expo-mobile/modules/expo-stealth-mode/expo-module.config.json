@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["ExpoStealthModeModule"]
+  },
+  "android": {
+    "modules": ["com.rajkumar.thunai.stealthmode.ExpoStealthModeModule"]
+  }
+}

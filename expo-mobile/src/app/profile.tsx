@@ -74,8 +74,18 @@ export default function ProfileScreen() {
 
     setIsSaving(true);
     try {
-      // 1. Sync to backend
-      const res = await fetch(`${SERVER_URL}/api/civilian/profile`, {
+      // 1. Save locally FIRST so data never vanishes
+      await SecureStore.setItemAsync('user_phone', phone);
+      await SecureStore.setItemAsync('user_name', name);
+      await SecureStore.setItemAsync('user_age', age);
+      await SecureStore.setItemAsync('user_address', address);
+      await SecureStore.setItemAsync('user_workplace', workplace);
+      if (photoBase64) {
+        await SecureStore.setItemAsync('user_photo_base64', photoBase64);
+      }
+
+      // 2. Sync to backend silently (don't throw error to user if server is sleeping)
+      fetch(`${SERVER_URL}/api/civilian/profile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -86,24 +96,9 @@ export default function ProfileScreen() {
           workplaceDetails: workplace,
           photoBase64: photoBase64
         })
-      });
+      }).catch(err => console.log('Backend sync delayed:', err));
 
-      if (!res.ok) {
-        throw new Error('Failed to save to server');
-      }
-
-      // 2. Save locally
-      await SecureStore.setItemAsync('user_phone', phone);
-      await SecureStore.setItemAsync('user_name', name);
-      await SecureStore.setItemAsync('user_age', age);
-      await SecureStore.setItemAsync('user_address', address);
-      await SecureStore.setItemAsync('user_workplace', workplace);
-      if (photoBase64) {
-        await SecureStore.setItemAsync('user_photo_base64', photoBase64);
-      }
-
-      Alert.alert('Success', 'Profile saved! You are now registered on the Thunai Safety Network. Your trusted contacts can now securely route SOS alerts to you.');
-      router.back();
+      Alert.alert('Success', 'Profile identity securely saved.');
     } catch (error) {
       console.error(error);
       Alert.alert('Error', 'Failed to save profile. Make sure you have an internet connection.');
@@ -162,7 +157,7 @@ export default function ProfileScreen() {
         <Text style={styles.label}>Full Name (Required)</Text>
         <TextInput 
           style={styles.input} 
-          placeholder="e.g. Priya Raj"
+          placeholder="Your Full Name"
           placeholderTextColor="#666"
           value={name}
           onChangeText={setName}

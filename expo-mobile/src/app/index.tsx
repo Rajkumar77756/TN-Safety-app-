@@ -15,6 +15,7 @@ import Animated, {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { startBackgroundRelayScanner, startOfflineSosBroadcast, stopOfflineSosBroadcast, requestBluetoothPermissions } from './BleManager';
+import StealthSettings from './StealthSettings';
 
 const { width } = Dimensions.get('window');
 export const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
@@ -39,6 +40,12 @@ export default function HomeScreen() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
+
+  // New Profile & Settings State
+  const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
+  const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
+  const [userProfileData, setUserProfileData] = useState<any>(null);
+  const [sosHistory, setSosHistory] = useState<any[]>([]);
 
   // Pulse animation values
   const pulseScale = useSharedValue(1);
@@ -95,8 +102,20 @@ export default function HomeScreen() {
       if (savedContacts) {
         setContacts(JSON.parse(savedContacts));
       }
+
+      // Load Profile Data
+      const name = await SecureStore.getItemAsync('user_name');
+      const phone = await SecureStore.getItemAsync('user_phone');
+      const age = await SecureStore.getItemAsync('user_age');
+      const address = await SecureStore.getItemAsync('user_address');
+      const photo = await SecureStore.getItemAsync('user_photo_base64');
+      setUserProfileData({ name, phone, age, address, photo });
+
+      // Load SOS History
+      const historyStr = await SecureStore.getItemAsync('sos_history');
+      if (historyStr) setSosHistory(JSON.parse(historyStr));
     } catch (e) {
-      console.error('Failed to load contacts', e);
+      console.error('Failed to load contacts or profile data', e);
     }
   };
 
@@ -202,6 +221,21 @@ export default function HomeScreen() {
       
       setLocationSub(sub);
 
+      // Save History locally
+      try {
+        const newLocationFix = await Location.getCurrentPositionAsync({});
+        const newSOSLog = {
+          timestamp: new Date().toISOString(),
+          latitude: newLocationFix.coords.latitude,
+          longitude: newLocationFix.coords.longitude
+        };
+        const updatedHistory = [newSOSLog, ...sosHistory];
+        setSosHistory(updatedHistory);
+        await SecureStore.setItemAsync('sos_history', JSON.stringify(updatedHistory));
+      } catch(e) {
+        console.log("Failed to log history", e);
+      }
+
     } catch (error) {
       console.error('Error fetching location:', error);
       setIsAlertActive(false);
@@ -231,9 +265,14 @@ export default function HomeScreen() {
       {/* Top Header */}
         <View style={styles.header}>
           <Text style={styles.logoText}>Thunai</Text>
-          <TouchableOpacity onPress={() => router.push('/profile')}>
-            <Ionicons name="person-circle-outline" size={32} color="#fff" />
-          </TouchableOpacity>
+          <View style={styles.headerIcons}>
+            <TouchableOpacity onPress={() => setIsProfileModalVisible(true)} style={styles.iconBtn}>
+              <Ionicons name="person-circle-outline" size={32} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)} style={styles.iconBtn}>
+              <Ionicons name="settings-outline" size={28} color="#fff" />
+            </TouchableOpacity>
+          </View>
         </View>
 
       {/* Instagram-style "Stories" Row (Trusted Contacts) */}
@@ -326,6 +365,74 @@ export default function HomeScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Settings Modal */}
+      <Modal visible={isSettingsModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalContent, { padding: 0 }]}>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between', padding: 20, borderBottomWidth: 1, borderBottomColor: '#333'}}>
+              <Text style={styles.modalTitle}>Settings</Text>
+              <TouchableOpacity onPress={() => setIsSettingsModalVisible(false)}>
+                <Ionicons name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{padding: 20}}>
+               <StealthSettings />
+               <Text style={{color: '#666', textAlign: 'center', marginTop: 30, marginBottom: 20}}>Beta 1.0</Text>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Profile History Modal */}
+      <Modal visible={isProfileModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20}}>
+              <Text style={styles.modalTitle}>Profile & History</Text>
+              <TouchableOpacity onPress={() => setIsProfileModalVisible(false)}>
+                <Ionicons name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={{alignItems: 'center', marginBottom: 20}}>
+               {userProfileData?.photo ? (
+                 <Image source={{ uri: userProfileData.photo }} style={{width: 100, height: 100, borderRadius: 50, marginBottom: 10, borderWidth: 2, borderColor: '#fff'}} />
+               ) : (
+                 <View style={{width: 100, height: 100, borderRadius: 50, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginBottom: 10}}>
+                    <Ionicons name="person" size={50} color="#666" />
+                 </View>
+               )}
+               <Text style={{color: '#fff', fontSize: 24, fontWeight: 'bold'}}>{userProfileData?.name || 'Unregistered'}</Text>
+               <Text style={{color: '#aaa', fontSize: 16}}>{userProfileData?.phone || 'No Phone Number'}</Text>
+               <Text style={{color: '#888', fontSize: 14}}>{userProfileData?.age ? `${userProfileData.age} years old` : ''}</Text>
+               <Text style={{color: '#888', fontSize: 14, textAlign: 'center', marginTop: 5}}>{userProfileData?.address || ''}</Text>
+               
+               <TouchableOpacity 
+                 style={{marginTop: 15, backgroundColor: '#333', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20}}
+                 onPress={() => { setIsProfileModalVisible(false); router.push('/profile'); }}
+               >
+                  <Text style={{color: '#fff', fontWeight: 'bold'}}>Edit Profile</Text>
+               </TouchableOpacity>
+            </View>
+
+            <Text style={{color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 10}}>SOS History ({sosHistory.length})</Text>
+            <ScrollView style={{maxHeight: 200}}>
+               {sosHistory.length === 0 ? (
+                 <Text style={{color: '#666', fontStyle: 'italic', textAlign: 'center', marginTop: 20}}>No SOS alerts triggered yet.</Text>
+               ) : (
+                 sosHistory.map((log, index) => (
+                   <View key={index} style={{backgroundColor: '#262626', padding: 10, borderRadius: 8, marginBottom: 10}}>
+                     <Text style={{color: '#ff0050', fontWeight: 'bold'}}>Alert {sosHistory.length - index}</Text>
+                     <Text style={{color: '#ccc', fontSize: 12, marginTop: 2}}>{new Date(log.timestamp).toLocaleString()}</Text>
+                     <Text style={{color: '#888', fontSize: 12}}>Lat: {log.latitude.toFixed(4)}, Lng: {log.longitude.toFixed(4)}</Text>
+                   </View>
+                 ))
+               )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* PEER TO PEER SOS ALERT MODAL */}
       <Modal visible={!!incomingSOS} animationType="slide" transparent={false}>
         <View style={styles.sosAlertModal}>
@@ -364,6 +471,16 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingVertical: 15,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  headerIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  iconBtn: {
+    marginLeft: 15,
   },
   logoText: {
     color: '#FFFFFF',
