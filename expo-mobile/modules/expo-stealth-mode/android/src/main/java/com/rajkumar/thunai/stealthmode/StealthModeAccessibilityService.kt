@@ -35,12 +35,15 @@ class StealthModeAccessibilityService : AccessibilityService() {
                 if (className.contains("GlobalActionsDialog") || className.contains("ResolverActivity") || className.contains("PowerMenu")) {
                     Log.d(TAG, "Detected Power Menu! Triggering Fake Overlay!")
                     
-                    // Close the real system dialog (if possible)
-                    val closeDialogsIntent = Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS)
-                    sendBroadcast(closeDialogsIntent)
-
-                    // Launch our Fake Power Menu Overlay Service/Activity
-                    triggerFakePowerMenu()
+                    // Android 12+ restricts ACTION_CLOSE_SYSTEM_DIALOGS.
+                    // We must use performGlobalAction to force the power menu to close.
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    
+                    // Small delay to ensure the real menu is gone before showing ours
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                        triggerFakePowerMenu()
+                    }, 100)
                 }
             }
         }

