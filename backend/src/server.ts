@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import dotenv from 'dotenv';
@@ -6,6 +7,9 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import cors from 'cors';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 import authRouter from './auth';
 import { initDb, pool } from './models/db';
 import { checkDeviceStatus } from './abuse-prevention';
@@ -24,6 +28,20 @@ const io = new Server(httpServer, {
 // Enable CORS for standard HTTP endpoints (like /api/dispatcher/login)
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '10mb' }));
+
+// Setup Audio Uploads Directory
+const uploadDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+});
+const upload = multer({ storage });
+
+// Serve static uploads
+app.use('/uploads', express.static(uploadDir));
 
 // Routes
 app.use('/api/auth', authRouter);
@@ -195,8 +213,76 @@ app.post('/api/dispatch/incident/:id/status', async (req, res) => {
     
     res.json({ success: true });
   } catch (e) {
-    console.error('Failed to update incident status', e);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// --- HISTORICAL INCIDENTS API ---
+app.get('/api/admin/incidents/history', requireAdmin, async (req, res) => {
+  const dateStr = req.query.date as string; // e.g. '2026-08-08'
+  if (!dateStr) return res.status(400).json({ error: 'Date is required' });
+
+  try {
+    const query = `
+      SELECT 
+        i.id as "incidentId",
+        i.device_uuid as "deviceUuid",
+        i.status,
+        i.district,
+        i.created_at as timestamp,
+        c.name, c.phone_number, c.age, c.current_address, c.photo_base64,
+        (SELECT ST_Y(geom) FROM locations l2 WHERE l2.incident_id = i.id ORDER BY recorded_at DESC LIMIT 1) as lat,
+        (SELECT ST_X(geom) FROM locations l2 WHERE l2.incident_id = i.id ORDER BY recorded_at DESC LIMIT 1) as lng
+      FROM incidents i
+      LEFT JOIN device_identity di ON i.device_uuid = di.uuid
+      LEFT JOIN civilian_profiles c ON di.phone_number = c.phone_number
+      WHERE DATE(i.created_at) = $1
+      ORDER BY i.created_at DESC
+    `;
+    const result = await pool.query(query, [dateStr]);
+    
+    const incidentsMap: Record<string, any> = {};
+    result.rows.forEach(row => {
+       incidentsMap[row.incidentId] = {
+         incidentId: row.incidentId,
+         deviceUuid: row.deviceUuid,
+         status: row.status,
+         district: row.district,
+         timestamp: new Date(row.timestamp).getTime(),
+         lat: row.lat || 11.1271, 
+         lng: row.lng || 78.6569,
+         senderProfile: row.name ? {
+            phone_number: row.phone_number,
+            name: row.name,
+            age: row.age,
+            current_address: row.current_address,
+            photo_base64: row.photo_base64
+         } : null
+       };
+    });
+
+    res.json({ incidents: incidentsMap });
+  } catch(e) {
+    console.error('History fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch history' });
+  }
+});
+
+// --- AUDIO EVIDENCE API ---
+app.post('/api/stealth/upload', upload.single('audioFile'), (req, res) => {
+  console.log(`[AUDIO] Received stealth recording: ${req.file?.filename}`);
+  res.json({ success: true, file: req.file?.filename });
+});
+
+app.get('/api/admin/incidents/:id/audio', requireAdmin, (req, res) => {
+  // For the pilot demo, return all audio files as we aren't strict matching incident IDs yet
+  try {
+    const files = fs.readdirSync(uploadDir);
+    const m4aFiles = files.filter(f => f.endsWith('.m4a')).sort().reverse();
+    const urls = m4aFiles.map(f => `/uploads/${f}`);
+    res.json({ audioFiles: urls });
+  } catch (e) {
+    res.json({ audioFiles: [] });
   }
 });
 
@@ -305,7 +391,7 @@ app.post('/api/mesh/relay', async (req, res) => {
 
 // --- PATROL OFFICER API (Signup / Login) ---
 app.post('/api/patrol/login', async (req, res) => {
-  const { phoneNumber, badgeNumber } = req.body;
+  const { phoneNumber, badgeNumber, name, stationName, pincode } = req.body;
   
   if (!phoneNumber || !badgeNumber) {
     return res.status(403).json({ error: 'Phone number and badge number are required' });
@@ -318,12 +404,15 @@ app.post('/api/patrol/login', async (req, res) => {
     let status;
 
     if (result.rows.length === 0) {
+      if (!name || !stationName || !pincode) {
+         return res.status(400).json({ error: 'Name, Station, and Pincode are required for new registration' });
+      }
       // New signup
       const insert = await pool.query(`
-        INSERT INTO patrol_officers (phone_number, badge_number, phone_verified, status)
-        VALUES ($1, $2, TRUE, 'PENDING') -- Simulated OTP success
+        INSERT INTO patrol_officers (phone_number, badge_number, name, station_name, pincode, phone_verified, status)
+        VALUES ($1, $2, $3, $4, $5, TRUE, 'PENDING') -- Simulated OTP success
         RETURNING id, status
-      `, [phoneNumber, badgeNumber]);
+      `, [phoneNumber, badgeNumber, name, stationName, pincode]);
       officerId = insert.rows[0].id;
       status = insert.rows[0].status;
     } else {
@@ -342,6 +431,74 @@ app.post('/api/patrol/login', async (req, res) => {
   } catch (e) {
     console.error('Patrol login error:', e);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/patrol/profile', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+    if (decoded.role !== 'PATROL') return res.status(403).json({ error: 'Forbidden' });
+    const result = await pool.query('SELECT name, badge_number, station_name, pincode, photo_base64, emergency_contact, status FROM patrol_officers WHERE id = $1', [decoded.patrolId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Officer not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(401).json({ error: 'Invalid token' }); }
+});
+
+app.post('/api/patrol/profile', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+    if (decoded.role !== 'PATROL') return res.status(403).json({ error: 'Forbidden' });
+    const { photoBase64, emergencyContact } = req.body;
+    await pool.query('UPDATE patrol_officers SET photo_base64 = $1, emergency_contact = $2 WHERE id = $3', [photoBase64, emergencyContact, decoded.patrolId]);
+    res.json({ success: true });
+  } catch (e) { res.status(401).json({ error: 'Invalid token' }); }
+});
+
+app.delete('/api/user/data', async (req, res) => {
+  const signature = req.headers['x-thunai-signature'] as string;
+  const timestamp = req.headers['x-thunai-timestamp'] as string;
+  const { phone } = req.body;
+
+  if (!signature || !timestamp || !phone) {
+    return res.status(400).json({ error: 'Missing required HMAC signature headers or payload' });
+  }
+
+  // Prevent replay attacks (must be within 5 minutes)
+  const now = Date.now();
+  if (Math.abs(now - parseInt(timestamp)) > 5 * 60 * 1000) {
+    return res.status(403).json({ error: 'Signature expired (replay protection)' });
+  }
+
+  const secretKey = 'thunai_secure_hmac_secret_2026';
+  const payload = `${phone}:${timestamp}`;
+  
+  const expectedSignature = crypto
+    .createHash('sha256')
+    .update(`${payload}:${secretKey}`)
+    .digest('hex');
+
+  if (signature !== expectedSignature) {
+    return res.status(403).json({ error: 'Invalid HMAC Signature. Unauthorized deletion request.' });
+  }
+
+  try {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`DELETE FROM civilian_profiles WHERE phone_number = $1 RETURNING phone_number`, [phone]);
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: 'User not found or already deleted' });
+      }
+      res.json({ message: 'Data permanently deleted per DPDP requirements. HMAC Verified.' });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Error deleting user data:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
@@ -459,6 +616,36 @@ io.on('connection', (socket) => {
       `, [payload.lat, payload.lng, socket.data.patrolId]);
     } catch (e) {
       console.error('Failed to update patrol location', e);
+    }
+  });
+
+  // Handle Dispatch Claim (The Dibs System)
+  socket.on('patrol_accept_dispatch', async (payload) => {
+    if (socket.data.role !== 'PATROL' || !socket.data.patrolId) return;
+    
+    try {
+      const officerCheck = await pool.query('SELECT name, badge_number FROM patrol_officers WHERE id = $1', [socket.data.patrolId]);
+      if (officerCheck.rows.length === 0) return;
+      const officer = officerCheck.rows[0];
+
+      // Broadcast to Master Control Room Dashboard
+      io.emit('incident_status_changed', {
+        incidentId: payload.incidentId,
+        status: 'ACTIVE',
+        notes: `CLAIMED BY: Officer ${officer.name} (Badge: ${officer.badge_number})`
+      });
+
+      // Broadcast to all OTHER officers so their UNCLAIMED screen updates
+      io.emit('dispatch_claimed_by_officer', {
+        incidentId: payload.incidentId,
+        officerName: officer.name,
+        badgeNumber: officer.badge_number,
+        claimerId: socket.data.patrolId
+      });
+      
+      console.log(`[DISPATCH CLAIM] Officer ${officer.name} claimed incident ${payload.incidentId}`);
+    } catch (e) {
+      console.error('Failed to process dispatch claim', e);
     }
   });
 
@@ -614,6 +801,54 @@ io.on('connection', (socket) => {
         io.to(incidentId).emit('incident_district_resolved', { incidentId, district: "Unknown" });
       }
     })();
+  });
+
+  // Handle Mesh Relay from Bystander Phones (Offline SOS forwarding via BLE)
+  socket.on('mesh-relay', async (payload) => {
+    console.log('[MESH RELAY via Socket] Received relay from bystander:', payload.relayDeviceId);
+    
+    const { relayDeviceId, encryptedPayload, relayTimestamp } = payload;
+    if (!encryptedPayload) return;
+
+    try {
+      const buf = Buffer.from(encryptedPayload, 'base64');
+      
+      if (buf.length < 16) {
+        console.error('[MESH RELAY] Invalid payload length');
+        return;
+      }
+      
+      const lat = buf.readFloatLE(0);
+      const lng = buf.readFloatLE(4);
+      const timestampSecs = buf.readUInt32LE(8);
+      const userIdHash = buf.readUInt32LE(12);
+      
+      const userId = 'user_' + userIdHash;
+      const timestamp = new Date(timestampSecs * 1000).toISOString();
+      
+      console.log(`[MESH RELAY] Decoded: Victim=${userId}, Lat=${lat}, Lng=${lng}`);
+
+      const incidentId = `mesh_${userId}_${timestampSecs}`;
+
+      // Blast the relayed SOS to the Police Dashboard
+      const broadcastPayload = { 
+        deviceUuid: userId, 
+        incidentId: incidentId, 
+        lat: lat, 
+        lng: lng,
+        timestamp: timestamp,
+        trustStatus: 'ACTIVE',
+        district: null,
+        senderProfile: null,
+        meshRelay: true,
+        relayDeviceId: relayDeviceId
+      };
+      
+      io.emit('new_incident', broadcastPayload);
+      console.log(`[MESH RELAY] SOS broadcasted to Police Dashboard!`);
+    } catch (e) {
+      console.error('[MESH RELAY] Failed to process relay:', e);
+    }
   });
 
   // Handle Secure Disarm / Cancel from Mobile App

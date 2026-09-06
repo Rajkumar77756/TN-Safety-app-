@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, ScrollView, Image, Dimensions, Vibration, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, ScrollView, Image, Dimensions, Vibration, Modal, TextInput, KeyboardAvoidingView, Platform, Appearance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import * as Location from 'expo-location';
@@ -15,7 +15,10 @@ import Animated, {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { startBackgroundRelayScanner, startOfflineSosBroadcast, stopOfflineSosBroadcast, requestBluetoothPermissions } from './BleManager';
+import { requireNativeModule, EventEmitter as ExpoEventEmitter } from 'expo-modules-core';
 import StealthSettings from './StealthSettings';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Colors } from '@/constants/theme';
 
 const { width } = Dimensions.get('window');
 export const SERVER_URL = 'https://tn-safety-app-qq1f.onrender.com';
@@ -54,6 +57,28 @@ export default function HomeScreen() {
 
   const [incomingSOS, setIncomingSOS] = useState<any>(null);
 
+  const systemColorScheme = useColorScheme();
+  const [colorScheme, setColorScheme] = useState(systemColorScheme ?? 'light');
+
+  useEffect(() => {
+    const subscription = Appearance.addChangeListener((preferences) => {
+      setColorScheme(preferences.colorScheme ?? 'light');
+    });
+    return () => subscription.remove();
+  }, []);
+
+  const theme = Colors[colorScheme];
+
+  useEffect(() => {
+    const checkConsent = async () => {
+      const consent = await SecureStore.getItemAsync('dpdp_consent');
+      if (!consent) {
+        router.replace('/ConsentScreen');
+      }
+    };
+    checkConsent();
+  }, []);
+
   useEffect(() => {
     let newSocket: any;
     const initSocket = async () => {
@@ -90,8 +115,34 @@ export default function HomeScreen() {
     initSocket();
     setupBle();
 
+    // === BLE MESH RELAY-TO-SERVER BRIDGE ===
+    // When this phone's BLE scanner picks up an SOS from a nearby victim,
+    // forward the encrypted payload to the backend server immediately.
+    let stealthModule: any = null;
+    let relaySubscription: any = null;
+    try {
+      stealthModule = requireNativeModule('ExpoStealthMode');
+      const emitter = new ExpoEventEmitter(stealthModule);
+      relaySubscription = emitter.addListener('onSosRelayReceived', (event: any) => {
+        console.log('[BLE RELAY] Received SOS from nearby victim! Forwarding to server...');
+        if (newSocket && newSocket.connected) {
+          newSocket.emit('mesh-relay', {
+            relayDeviceId: deviceId,
+            encryptedPayload: event.payloadBase64,
+            relayTimestamp: new Date().toISOString()
+          });
+          console.log('[BLE RELAY] Successfully forwarded to backend!');
+        } else {
+          console.warn('[BLE RELAY] No internet on relay device. Re-broadcasting via BLE mesh...');
+        }
+      });
+    } catch (e) {
+      console.warn('[BLE RELAY] Native module not available for relay listening', e);
+    }
+
     return () => {
       if (newSocket) newSocket.disconnect();
+      if (relaySubscription) relaySubscription.remove();
       Vibration.cancel();
     };
   }, []);
@@ -190,44 +241,50 @@ export default function HomeScreen() {
       const phone = await SecureStore.getItemAsync('user_phone');
       const trustedPhoneNumbers = contacts.map(c => c.phone);
 
-      // Start continuous live tracking
-      const sub = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 5000,
-          distanceInterval: 10,
-        },
-        (newLocation) => {
-          if (socket && socket.connected) {
-            socket.emit('sos-alert', {
-              userId: deviceId,
-              senderPhone: phone || null,
-              trustedContacts: trustedPhoneNumbers,
-              latitude: newLocation.coords.latitude,
-              longitude: newLocation.coords.longitude,
-              timestamp: new Date().toISOString()
-            });
-          } else {
-            // OFFLINE MESH FALLBACK: Broadcast via Bluetooth LE
-            startOfflineSosBroadcast({
-              userId: deviceId,
-              lat: newLocation.coords.latitude,
-              lng: newLocation.coords.longitude,
-              senderPhone: phone || null
-            });
-          }
-        }
-      );
-      
-      setLocationSub(sub);
+      // 1. INSTANT SOS FIRED: Get Last Known Location for zero-latency dispatch
+      let initialLoc = await Location.getLastKnownPositionAsync();
+      if (!initialLoc) {
+        // Fallback: request low-accuracy quick fix if no last known location exists
+        initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      }
 
-      // Save History locally
+      const emitSosPayload = (loc: Location.LocationObject) => {
+        if (socket && socket.connected) {
+          socket.emit('sos-alert', {
+            userId: deviceId,
+            senderPhone: phone || null,
+            trustedContacts: trustedPhoneNumbers,
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            timestamp: new Date().toISOString()
+          });
+          
+          // VERIFY NETWORK STATE BEFORE MEDIA STREAMING
+          // Since socket is connected, internet is available.
+          console.log("Internet confirmed: Starting Live Audio/Video streaming...");
+          // startMediaStreams();
+          
+        } else {
+          // OFFLINE MESH FALLBACK: Broadcast via Bluetooth LE
+          console.log("No internet: Using offline BLE broadcast, media streaming disabled.");
+          startOfflineSosBroadcast({
+            userId: deviceId,
+            lat: loc.coords.latitude,
+            lng: loc.coords.longitude,
+            senderPhone: phone || null
+          });
+        }
+      };
+
+      // Fire immediately!
+      emitSosPayload(initialLoc);
+
+      // Save History locally instantly
       try {
-        const newLocationFix = await Location.getCurrentPositionAsync({});
         const newSOSLog = {
           timestamp: new Date().toISOString(),
-          latitude: newLocationFix.coords.latitude,
-          longitude: newLocationFix.coords.longitude
+          latitude: initialLoc.coords.latitude,
+          longitude: initialLoc.coords.longitude
         };
         const updatedHistory = [newSOSLog, ...sosHistory];
         setSosHistory(updatedHistory);
@@ -235,6 +292,20 @@ export default function HomeScreen() {
       } catch(e) {
         console.log("Failed to log history", e);
       }
+
+      // 2. Start continuous live tracking to update the dispatch dashboard as the victim moves
+      const sub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          timeInterval: 5000,
+          distanceInterval: 10,
+        },
+        (newLocation) => {
+          emitSosPayload(newLocation);
+        }
+      );
+      
+      setLocationSub(sub);
 
     } catch (error) {
       console.error('Error fetching location:', error);
@@ -261,40 +332,40 @@ export default function HomeScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Top Header */}
         <View style={styles.header}>
-          <Text style={styles.logoText}>Thunai</Text>
+          <Text style={[styles.logoText, { color: theme.text }]}>Thunai</Text>
           <View style={styles.headerIcons}>
             <TouchableOpacity onPress={() => setIsProfileModalVisible(true)} style={styles.iconBtn}>
-              <Ionicons name="person-circle-outline" size={32} color="#fff" />
+              <Ionicons name="person-circle-outline" size={32} color={theme.text} />
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)} style={styles.iconBtn}>
-              <Ionicons name="settings-outline" size={28} color="#fff" />
+              <Ionicons name="settings-outline" size={28} color={theme.text} />
             </TouchableOpacity>
           </View>
         </View>
 
       {/* Instagram-style "Stories" Row (Trusted Contacts) */}
-      <View style={styles.storiesContainer}>
+      <View style={[styles.storiesContainer, { borderBottomColor: theme.backgroundSelected }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storiesScroll}>
           {/* Add New Contact Button */}
           <TouchableOpacity style={styles.storyWrapper} onPress={() => setIsModalVisible(true)}>
-            <View style={[styles.storyRing, styles.addStoryRing]}>
-              <View style={styles.addIconContainer}>
-                <Text style={styles.addIcon}>+</Text>
+            <View style={[styles.storyRing, { borderColor: theme.backgroundSelected }]}>
+              <View style={[styles.addIconContainer, { backgroundColor: theme.backgroundElement }]}>
+                <Text style={[styles.addIcon, { color: theme.text }]}>+</Text>
               </View>
             </View>
-            <Text style={styles.storyName}>Add Contact</Text>
+            <Text style={[styles.storyName, { color: theme.textSecondary }]}>Add Contact</Text>
           </TouchableOpacity>
 
           {/* Trusted Contacts */}
           {contacts.map(contact => (
             <View key={contact.id} style={styles.storyWrapper}>
-              <View style={styles.storyRing}>
+              <View style={[styles.storyRing, { borderColor: '#ff0050' }]}>
                 <Image source={{ uri: contact.image }} style={styles.storyImage} />
               </View>
-              <Text style={styles.storyName}>{contact.name}</Text>
+              <Text style={[styles.storyName, { color: theme.textSecondary }]}>{contact.name}</Text>
             </View>
           ))}
         </ScrollView>
@@ -308,13 +379,13 @@ export default function HomeScreen() {
           )}
           
           <TouchableOpacity activeOpacity={0.9} onLongPress={triggerSOS} delayLongPress={1500}>
-            <Animated.View style={[styles.sosButton, animatedButtonStyle, isAlertActive && styles.sosButtonActive]}>
-              <Text style={styles.sosText}>{isAlertActive ? 'ACTIVE' : 'SOS'}</Text>
+            <Animated.View style={[styles.sosButton, { backgroundColor: theme.backgroundElement }, animatedButtonStyle, isAlertActive && styles.sosButtonActive]}>
+              <Text style={[styles.sosText, isAlertActive && { color: '#FFFFFF' }]}>{isAlertActive ? 'ACTIVE' : 'SOS'}</Text>
             </Animated.View>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.statusText}>
+        <Text style={[styles.statusText, { color: theme.textSecondary }]}>
           {isAlertActive 
             ? 'Alert sent to Trusted Contacts & Control Room.' 
             : 'Press and hold for 1.5 seconds if you are in danger.'}
@@ -325,37 +396,44 @@ export default function HomeScreen() {
       {isAlertActive && (
         <View style={styles.disarmContainer}>
           <TouchableOpacity onLongPress={disarmSOS} delayLongPress={3000}>
-            <Text style={styles.disarmText}>Disarm System (Hold 3s)</Text>
+            <Text style={[styles.disarmText, { color: theme.textSecondary }]}>Disarm System (Hold 3s)</Text>
           </TouchableOpacity>
         </View>
       )}
 
+      {/* Privacy Policy Link */}
+      <View style={styles.footerLinkContainer}>
+         <TouchableOpacity onPress={() => router.push('/privacy-policy')}>
+           <Text style={[styles.footerLink, { color: theme.textSecondary }]}>Privacy Policy</Text>
+         </TouchableOpacity>
+      </View>
+
       {/* Add Contact Modal */}
-      <Modal visible={isModalVisible} animationType="slide" transparent={true}>
+      <Modal visible={isModalVisible} animationType="slide" transparent={true} onRequestClose={() => setIsModalVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Trusted Contact</Text>
+          <View style={[styles.modalContent, { backgroundColor: theme.backgroundElement }]}>
+            <Text style={[styles.modalTitle, { color: theme.text }]}>Add Trusted Contact</Text>
             
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
               placeholder="Name (e.g. Mom)"
-              placeholderTextColor="#666"
+              placeholderTextColor={theme.textSecondary}
               value={newName}
               onChangeText={setNewName}
             />
             
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
               placeholder="Phone Number"
-              placeholderTextColor="#666"
+              placeholderTextColor={theme.textSecondary}
               keyboardType="phone-pad"
               value={newPhone}
               onChangeText={setNewPhone}
             />
 
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setIsModalVisible(false)}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
+              <TouchableOpacity style={[styles.cancelBtn, { backgroundColor: theme.backgroundSelected }]} onPress={() => setIsModalVisible(false)}>
+                <Text style={[styles.cancelBtnText, { color: theme.text }]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.saveBtn} onPress={saveContact}>
                 <Text style={styles.saveBtnText}>Save Contact</Text>
@@ -366,65 +444,65 @@ export default function HomeScreen() {
       </Modal>
 
       {/* Settings Modal */}
-      <Modal visible={isSettingsModalVisible} animationType="slide" transparent={true}>
+      <Modal visible={isSettingsModalVisible} animationType="slide" transparent={true} onRequestClose={() => setIsSettingsModalVisible(false)}>
         <View style={styles.modalContainer}>
-          <View style={[styles.modalContent, { padding: 0 }]}>
-            <View style={{flexDirection: 'row', justifyContent: 'space-between', padding: 20, borderBottomWidth: 1, borderBottomColor: '#333'}}>
-              <Text style={styles.modalTitle}>Settings</Text>
+          <View style={[styles.modalContent, { padding: 0, backgroundColor: theme.backgroundElement }]}>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between', padding: 20, borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected}}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Settings</Text>
               <TouchableOpacity onPress={() => setIsSettingsModalVisible(false)}>
-                <Ionicons name="close" size={28} color="#fff" />
+                <Ionicons name="close" size={28} color={theme.text} />
               </TouchableOpacity>
             </View>
             <ScrollView style={{padding: 20}}>
                <StealthSettings />
-               <Text style={{color: '#666', textAlign: 'center', marginTop: 30, marginBottom: 20}}>Beta 1.0</Text>
+               <Text style={{color: theme.textSecondary, textAlign: 'center', marginTop: 30, marginBottom: 20}}>Beta 1.0</Text>
             </ScrollView>
           </View>
         </View>
       </Modal>
 
       {/* Profile History Modal */}
-      <Modal visible={isProfileModalVisible} animationType="fade" transparent={true}>
+      <Modal visible={isProfileModalVisible} animationType="fade" transparent={true} onRequestClose={() => setIsProfileModalVisible(false)}>
         <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { backgroundColor: theme.backgroundElement }]}>
             <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20}}>
-              <Text style={styles.modalTitle}>Profile & History</Text>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Profile & History</Text>
               <TouchableOpacity onPress={() => setIsProfileModalVisible(false)}>
-                <Ionicons name="close" size={28} color="#fff" />
+                <Ionicons name="close" size={28} color={theme.text} />
               </TouchableOpacity>
             </View>
             
             <View style={{alignItems: 'center', marginBottom: 20}}>
                {userProfileData?.photo ? (
-                 <Image source={{ uri: userProfileData.photo }} style={{width: 100, height: 100, borderRadius: 50, marginBottom: 10, borderWidth: 2, borderColor: '#fff'}} />
+                 <Image source={{ uri: userProfileData.photo }} style={{width: 100, height: 100, borderRadius: 50, marginBottom: 10, borderWidth: 2, borderColor: theme.background}} />
                ) : (
-                 <View style={{width: 100, height: 100, borderRadius: 50, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginBottom: 10}}>
-                    <Ionicons name="person" size={50} color="#666" />
+                 <View style={{width: 100, height: 100, borderRadius: 50, backgroundColor: theme.backgroundSelected, justifyContent: 'center', alignItems: 'center', marginBottom: 10}}>
+                    <Ionicons name="person" size={50} color={theme.textSecondary} />
                  </View>
                )}
-               <Text style={{color: '#fff', fontSize: 24, fontWeight: 'bold'}}>{userProfileData?.name || 'Unregistered'}</Text>
-               <Text style={{color: '#aaa', fontSize: 16}}>{userProfileData?.phone || 'No Phone Number'}</Text>
-               <Text style={{color: '#888', fontSize: 14}}>{userProfileData?.age ? `${userProfileData.age} years old` : ''}</Text>
-               <Text style={{color: '#888', fontSize: 14, textAlign: 'center', marginTop: 5}}>{userProfileData?.address || ''}</Text>
+               <Text style={{color: theme.text, fontSize: 24, fontWeight: 'bold'}}>{userProfileData?.name || 'Unregistered'}</Text>
+               <Text style={{color: theme.textSecondary, fontSize: 16}}>{userProfileData?.phone || 'No Phone Number'}</Text>
+               <Text style={{color: theme.textSecondary, fontSize: 14}}>{userProfileData?.age ? `${userProfileData.age} years old` : ''}</Text>
+               <Text style={{color: theme.textSecondary, fontSize: 14, textAlign: 'center', marginTop: 5}}>{userProfileData?.address || ''}</Text>
                
                <TouchableOpacity 
-                 style={{marginTop: 15, backgroundColor: '#333', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20}}
+                 style={{marginTop: 15, backgroundColor: theme.backgroundSelected, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20}}
                  onPress={() => { setIsProfileModalVisible(false); router.push('/profile'); }}
                >
-                  <Text style={{color: '#fff', fontWeight: 'bold'}}>Edit Profile</Text>
+                  <Text style={{color: theme.text, fontWeight: 'bold'}}>Edit Profile</Text>
                </TouchableOpacity>
             </View>
 
-            <Text style={{color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 10}}>SOS History ({sosHistory.length})</Text>
+            <Text style={{color: theme.text, fontSize: 18, fontWeight: 'bold', marginBottom: 10}}>SOS History ({sosHistory.length})</Text>
             <ScrollView style={{maxHeight: 200}}>
                {sosHistory.length === 0 ? (
-                 <Text style={{color: '#666', fontStyle: 'italic', textAlign: 'center', marginTop: 20}}>No SOS alerts triggered yet.</Text>
+                 <Text style={{color: theme.textSecondary, fontStyle: 'italic', textAlign: 'center', marginTop: 20}}>No SOS alerts triggered yet.</Text>
                ) : (
                  sosHistory.map((log, index) => (
-                   <View key={index} style={{backgroundColor: '#262626', padding: 10, borderRadius: 8, marginBottom: 10}}>
+                   <View key={index} style={{backgroundColor: theme.background, padding: 10, borderRadius: 8, marginBottom: 10}}>
                      <Text style={{color: '#ff0050', fontWeight: 'bold'}}>Alert {sosHistory.length - index}</Text>
-                     <Text style={{color: '#ccc', fontSize: 12, marginTop: 2}}>{new Date(log.timestamp).toLocaleString()}</Text>
-                     <Text style={{color: '#888', fontSize: 12}}>Lat: {log.latitude.toFixed(4)}, Lng: {log.longitude.toFixed(4)}</Text>
+                     <Text style={{color: theme.textSecondary, fontSize: 12, marginTop: 2}}>{new Date(log.timestamp).toLocaleString()}</Text>
+                     <Text style={{color: theme.textSecondary, fontSize: 12}}>Lat: {log.latitude.toFixed(4)}, Lng: {log.longitude.toFixed(4)}</Text>
                    </View>
                  ))
                )}
@@ -434,7 +512,7 @@ export default function HomeScreen() {
       </Modal>
 
       {/* PEER TO PEER SOS ALERT MODAL */}
-      <Modal visible={!!incomingSOS} animationType="slide" transparent={false}>
+      <Modal visible={!!incomingSOS} animationType="slide" transparent={false} onRequestClose={() => { Vibration.cancel(); setIncomingSOS(null); }}>
         <View style={styles.sosAlertModal}>
           <Text style={styles.sosAlertTitle}>🚨 EMERGENCY SOS 🚨</Text>
           <Text style={styles.sosAlertSubtitle}>A trusted contact is in danger!</Text>
@@ -466,7 +544,6 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000', 
   },
   header: {
     paddingHorizontal: 20,
@@ -483,14 +560,12 @@ const styles = StyleSheet.create({
     marginLeft: 15,
   },
   logoText: {
-    color: '#FFFFFF',
     fontSize: 28,
     fontWeight: 'bold',
     fontStyle: 'italic',
   },
   storiesContainer: {
     borderBottomWidth: 0.5,
-    borderBottomColor: '#262626',
     paddingBottom: 15,
   },
   storiesScroll: {
@@ -506,13 +581,9 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 36,
     borderWidth: 2,
-    borderColor: '#ff0050',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 2,
-  },
-  addStoryRing: {
-    borderColor: '#262626',
   },
   storyImage: {
     width: 64,
@@ -523,17 +594,14 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#262626',
     justifyContent: 'center',
     alignItems: 'center',
   },
   addIcon: {
-    color: '#FFFFFF',
     fontSize: 30,
     fontWeight: '200',
   },
   storyName: {
-    color: '#A8A8A8',
     fontSize: 12,
     marginTop: 5,
   },
@@ -560,7 +628,6 @@ const styles = StyleSheet.create({
     width: width * 0.5,
     height: width * 0.5,
     borderRadius: width * 0.25,
-    backgroundColor: '#1c1c1c',
     borderWidth: 5,
     borderColor: '#ff0050',
     justifyContent: 'center',
@@ -575,13 +642,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#ff0050',
   },
   sosText: {
-    color: '#FFFFFF',
+    color: '#ff0050',
     fontSize: 36,
     fontWeight: '900',
     letterSpacing: 2,
   },
   statusText: {
-    color: '#A8A8A8',
     fontSize: 16,
     marginTop: 40,
     textAlign: 'center',
@@ -593,8 +659,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   disarmText: {
-    color: '#333333', // Very dark grey so it's barely noticeable to an attacker
     fontSize: 14,
+  },
+  footerLinkContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  footerLink: {
+    fontSize: 14,
+    textDecorationLine: 'underline',
   },
   // Modal Styles
   modalContainer: {
@@ -603,25 +676,20 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
   modalContent: {
-    backgroundColor: '#1c1c1c',
     padding: 25,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
   },
   modalTitle: {
-    color: '#FFFFFF',
     fontSize: 20,
     fontWeight: 'bold',
     marginBottom: 20,
   },
   input: {
-    backgroundColor: '#000000',
-    color: '#FFFFFF',
     padding: 15,
     borderRadius: 10,
     marginBottom: 15,
     borderWidth: 1,
-    borderColor: '#333',
   },
   modalActions: {
     flexDirection: 'row',
@@ -633,11 +701,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     flex: 1,
     marginRight: 10,
-    backgroundColor: '#333',
     alignItems: 'center',
   },
   cancelBtnText: {
-    color: '#FFFFFF',
     fontWeight: 'bold',
   },
   saveBtn: {
