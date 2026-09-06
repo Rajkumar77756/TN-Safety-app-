@@ -17,6 +17,7 @@ L.Icon.Default.mergeOptions({
 interface MapProps {
   incidents: Record<string, Incident>;
   selectedIncidentId: string | null;
+  historicalIncidents?: Record<string, Incident>;
 }
 
 // Controller component to hook into the Leaflet map instance and trigger flyTo animations
@@ -37,7 +38,7 @@ function MapZoomController({ selectedIncidentId, incidents }: MapProps) {
   return null; // This component doesn't render anything visually
 }
 
-export default function MapComponent({ incidents, selectedIncidentId }: MapProps) {
+export default function MapComponent({ incidents, selectedIncidentId, historicalIncidents = {} }: MapProps) {
   // Center of Tamil Nadu
   const centerPosition: [number, number] = [11.1271, 78.6569]; 
   
@@ -65,11 +66,26 @@ export default function MapComponent({ incidents, selectedIncidentId }: MapProps
       >
         <MapZoomController selectedIncidentId={selectedIncidentId} incidents={incidents} />
 
-        {/* Sleek Dark Mode Map Tiles via CartoDB */}
+        {/* Standard OSM Tiles inverted for Dark Mode via CSS (No API Key Required!) */}
         <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          className="dark-map-tiles"
         />
+
+        {/* PREDICTIVE AI HEATMAP (Historical Incidents) */}
+        {Object.values(historicalIncidents).map((incident) => (
+          <Circle
+            key={`history-${incident.incidentId}`}
+            center={[incident.lat, incident.lng]}
+            radius={200} // Much larger radius for heatmap diffusion
+            pathOptions={{
+              color: 'transparent',
+              fillColor: '#ff0000', // Intense red
+              fillOpacity: 0.15 // Overlapping circles will compound to bright red
+            }}
+          />
+        ))}
 
         {activeIncidentList.map((incident) => {
           const isFlagged = incident.trustStatus === "NEEDS_REVIEW";
@@ -80,6 +96,12 @@ export default function MapComponent({ incidents, selectedIncidentId }: MapProps
           if (isFlagged) circleColor = "#f5a623"; // Flagged (Orange)
           if (isAnswered) circleColor = "#00ff00"; // Answered (Green)
           if (isCancelled) circleColor = "#555555"; // Cancelled/Offline (Grey)
+
+          // Hide dismissed/answered incidents from the map UNLESS they are actively clicked/selected
+          const isInactive = isAnswered || isCancelled;
+          if (isInactive && incident.incidentId !== selectedIncidentId) {
+            return null;
+          }
 
           return (
             <div key={incident.incidentId}>
