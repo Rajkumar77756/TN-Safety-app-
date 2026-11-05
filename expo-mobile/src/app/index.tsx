@@ -123,17 +123,32 @@ export default function HomeScreen() {
     try {
       stealthModule = requireNativeModule('ExpoStealthMode');
       const emitter = new ExpoEventEmitter(stealthModule);
-      relaySubscription = emitter.addListener('onSosRelayReceived', (event: any) => {
+      relaySubscription = emitter.addListener('onSosRelayReceived', async (event: any) => {
         console.log('[BLE RELAY] Received SOS from nearby victim! Forwarding to server...');
+        const relayBody = {
+          relayDeviceId: deviceId,
+          encryptedPayload: event.payloadBase64,
+          relayTimestamp: new Date().toISOString()
+        };
+
+        // 1. Dual delivery: WebSocket
         if (newSocket && newSocket.connected) {
-          newSocket.emit('mesh-relay', {
-            relayDeviceId: deviceId,
-            encryptedPayload: event.payloadBase64,
-            relayTimestamp: new Date().toISOString()
+          newSocket.emit('mesh-relay', relayBody);
+          console.log('[BLE RELAY] Forwarded via WebSocket!');
+        }
+
+        // 2. Dual delivery: HTTP POST fallback
+        try {
+          const res = await fetch(`${SERVER_URL}/api/mesh/relay`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(relayBody)
           });
-          console.log('[BLE RELAY] Successfully forwarded to backend!');
-        } else {
-          console.warn('[BLE RELAY] No internet on relay device. Re-broadcasting via BLE mesh...');
+          if (res.ok) {
+            console.log('[BLE RELAY] Forwarded via HTTP POST successfully!');
+          }
+        } catch (fetchErr) {
+          console.warn('[BLE RELAY] HTTP POST forward error (offline or unreachable):', fetchErr);
         }
       });
     } catch (e) {

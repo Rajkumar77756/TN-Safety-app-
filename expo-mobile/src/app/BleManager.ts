@@ -1,50 +1,16 @@
 import { Platform, PermissionsAndroid } from 'react-native';
+import { requireNativeModule } from 'expo-modules-core';
+import { Buffer } from 'buffer';
 
-// CRITICAL: Do NOT import native BLE modules at the top level.
-// Top-level imports force the JS engine to evaluate the native module binding
-// during bundle load. If the native module crashes during registration
-// (e.g., the registerReceiver SecurityException), the entire JS bundle
-// fails to load — no ErrorBoundary, no ErrorUtils, nothing catches it.
-// Instead, we use lazy dynamic requires that only execute when BLE is actually needed.
-
-let _BleManager: any = null;
-let _BLEAdvertiser: any = null;
-let _bleManagerInstance: any = null;
-
-function getBleManager() {
-  if (!_BleManager) {
-    try {
-      _BleManager = require('react-native-ble-plx').BleManager;
-    } catch (e) {
-      console.error('[BLE] Failed to load react-native-ble-plx:', e);
-      return null;
-    }
-  }
-  if (!_bleManagerInstance) {
-    try {
-      _bleManagerInstance = new _BleManager();
-    } catch (e) {
-      console.error('[BLE] Failed to create BleManager instance:', e);
-      return null;
-    }
-  }
-  return _bleManagerInstance;
+let ExpoStealthMode: any = null;
+try {
+  ExpoStealthMode = requireNativeModule('ExpoStealthMode');
+} catch (e) {
+  console.error('Failed to load ExpoStealthMode native module', e);
 }
 
-function getBLEAdvertiser() {
-  if (!_BLEAdvertiser) {
-    try {
-      _BLEAdvertiser = require('react-native-ble-advertiser').default;
-    } catch (e) {
-      console.error('[BLE] Failed to load react-native-ble-advertiser:', e);
-      return null;
-    }
-  }
-  return _BLEAdvertiser;
-}
-
-// Unique 128-bit UUID for the Thunai SOS Service
-export const THUNAI_SOS_SERVICE_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
+// Unique 16-bit UUID (0xFD69 mapped to 128-bit base) for the Thunai SOS Service
+export const THUNAI_SOS_SERVICE_UUID = '0000FD69-0000-1000-8000-00805F9B34FB';
 
 export const requestBluetoothPermissions = async () => {
   if (Platform.OS === 'android') {
@@ -68,28 +34,37 @@ export const requestBluetoothPermissions = async () => {
   return true;
 };
 
+import CryptoJS from 'crypto-js';
+
+const BLE_SECRET_KEY = CryptoJS.enc.Utf8.parse('thunai_securekey'); // 16-byte key
+const BLE_IV = CryptoJS.enc.Utf8.parse('thunai_secure_iv'); // 16-byte IV
+
 /**
  * TIGHT BINARY ENCODER
- * Packs critical emergency data into exactly 16 bytes for BLE Advertising
+ * Packs critical emergency data into exactly 16 bytes for BLE Advertising,
+ * then encrypts it using AES to prevent stalkers from tracking plaintext IDs.
  */
-function encodeSosPayload(userId: string, lat: number, lng: number): number[] {
+function encodeSosPayload(userId: string, lat: number, lng: number): string {
   const buf = new ArrayBuffer(16);
   const view = new DataView(buf);
   
-  // 0-3: Latitude (Float32)
   view.setFloat32(0, lat, true); // Little endian
-  
-  // 4-7: Longitude (Float32)
   view.setFloat32(4, lng, true);
-  
-  // 8-11: Timestamp (UInt32) seconds since epoch
   view.setUint32(8, Math.floor(Date.now() / 1000), true);
   
-  // 12-15: User ID Hash (UInt32) - extract numbers from 'user_1234'
   const idHash = parseInt(userId.replace(/\D/g, ''), 10) || 0;
   view.setUint32(12, idHash, true);
   
-  return Array.from(new Uint8Array(buf));
+  // Encrypt with AES
+  const wordArray = CryptoJS.lib.WordArray.create(buf as any);
+  const encrypted = CryptoJS.AES.encrypt(wordArray, BLE_SECRET_KEY, {
+    iv: BLE_IV,
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.NoPadding
+  });
+  
+  // encrypted.toString() returns Base64 format
+  return encrypted.toString();
 }
 
 /**
@@ -103,41 +78,31 @@ export const startOfflineSosBroadcast = async (payload: { userId: string, lat: n
       return;
     }
 
-    const advertiser = getBLEAdvertiser();
-    if (!advertiser) {
-      console.warn('[BLE] BLE Advertiser module not available on this device.');
+    if (!ExpoStealthMode) {
+      console.warn('[BLE] Native module not available.');
       return;
     }
 
-    console.log('[BLE] Starting Offline SOS Broadcast...');
-    
-    const packedBytes = encodeSosPayload(payload.userId, payload.lat, payload.lng);
-    
-    advertiser.setCompanyId(0xFFFF);
+    console.log('[BLE] Starting NATIVE Kotlin Offline SOS Broadcast...');
+    const base64Payload = encodeSosPayload(payload.userId, payload.lat, payload.lng);
     
     if (Platform.OS === 'android') {
-      await advertiser.broadcast(THUNAI_SOS_SERVICE_UUID, packedBytes, {
-        includeDeviceName: false,
-        includeTxPowerLevel: true,
-      });
-      console.log('[BLE] Android Broadcast Active');
-    } else {
-      console.warn('BLE Broadcasting on iOS requires custom CoreBluetooth implementation in bare React Native.');
+      ExpoStealthMode.broadcastSosPayload(base64Payload);
+      console.log('[BLE] Native Android Foreground Broadcast Active');
     }
   } catch (err) {
-    console.error('[BLE] Failed to start broadcast', err);
+    console.error('[BLE] Failed to start native broadcast', err);
   }
 };
 
 export const stopOfflineSosBroadcast = async () => {
   try {
-    const advertiser = getBLEAdvertiser();
-    if (advertiser) {
-      await advertiser.stopBroadcast();
-      console.log('[BLE] Stopped Broadcast');
+    if (ExpoStealthMode) {
+      ExpoStealthMode.stopMeshService();
+      console.log('[BLE] Stopped Native Broadcast');
     }
   } catch (err) {
-    console.error('[BLE] Failed to stop broadcast', err);
+    console.error('[BLE] Failed to stop native broadcast', err);
   }
 };
 
@@ -146,45 +111,17 @@ export const stopOfflineSosBroadcast = async () => {
  */
 export const startBackgroundRelayScanner = (serverUrl: string) => {
   try {
-    console.log('[BLE] Starting Background Relay Scanner...');
-    
-    const manager = getBleManager();
-    if (!manager) {
-      console.warn('[BLE] BLE Scanner module not available on this device.');
-      return;
+    console.log('[BLE] Starting NATIVE Kotlin Background Relay Scanner...');
+    if (ExpoStealthMode && Platform.OS === 'android') {
+      ExpoStealthMode.startMeshService();
     }
-    
-    manager.startDeviceScan([THUNAI_SOS_SERVICE_UUID], { allowDuplicates: false }, async (error: any, device: any) => {
-      if (error) {
-        console.error('[BLE] Scan error', error);
-        return;
-      }
-
-      if (device) {
-        console.log(`[BLE] Detected SOS Signal from Device ID: ${device.id}`);
-        
-        if (manager) {
-          manager.stopDeviceScan();
-        }
-        
-        try {
-          await fetch(`${serverUrl}/api/mesh/relay`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              relayDeviceId: 'anonymous_relay_node',
-              encryptedPayload: 'MOCKED_ENCRYPTED_PAYLOAD_FROM_BLE_MAC_' + device.id
-            })
-          });
-          console.log('[BLE] Successfully relayed SOS packet to Cloud Backend!');
-        } catch (err) {
-          console.error('[BLE] Failed to relay packet. Internet might be down.', err);
-        }
-        
-        setTimeout(() => startBackgroundRelayScanner(serverUrl), 10000);
-      }
-    });
   } catch (err) {
-    console.error('[BLE] Native Module Crash: Failed to start relay scanner', err);
+    console.error('[BLE] Failed to start native relay scanner', err);
   }
 };
+
+export const requestBatteryExemption = () => {
+    if (ExpoStealthMode && Platform.OS === 'android') {
+        ExpoStealthMode.requestBatteryExemption();
+    }
+}
