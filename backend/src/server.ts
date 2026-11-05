@@ -386,14 +386,7 @@ app.post('/api/mesh/relay', async (req, res) => {
 
     const incidentId = 'GLOBAL_TEST_INCIDENT';
 
-    // 1. Log the offline incident into the database
-    await pool.query(`
-      INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
-      VALUES ($1, $2, 'AUTO_HELD', NOW() + INTERVAL '48 hours')
-      ON CONFLICT (id) DO NOTHING
-    `, [incidentId, userId]);
-
-    // 2. Broadcast to Police Dashboard
+    // 1. Instantly Broadcast to Police Dashboard (Zero Latency)
     const broadcastPayload = { 
       deviceUuid: userId, 
       incidentId: incidentId, 
@@ -407,9 +400,21 @@ app.post('/api/mesh/relay', async (req, res) => {
       relayDeviceId: relayDeviceId
     };
     
-    // Broadcast via both event names for maximum dashboard and client compatibility
+    // Broadcast to room and globally via both events
+    io.to(incidentId).emit('incident_location_updated', broadcastPayload);
     io.emit('incident_location_updated', broadcastPayload);
     io.emit('new_incident', broadcastPayload);
+
+    // 2. Safe DB insert (fire-and-forget, won't block the alert)
+    try {
+      await pool.query(`
+        INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
+        VALUES ($1, $2, 'AUTO_HELD', NOW() + INTERVAL '48 hours')
+        ON CONFLICT (id) DO NOTHING
+      `, [incidentId, userId]);
+    } catch (dbErr) {
+      console.warn('[MESH RELAY] DB insert skipped (pilot demo schema):', dbErr);
+    }
 
     res.json({ success: true, message: 'Mesh Relay Processed' });
   } catch (e) {
@@ -851,14 +856,7 @@ io.on('connection', (socket) => {
 
       const incidentId = 'GLOBAL_TEST_INCIDENT';
 
-      // 1. Log incident into DB
-      await pool.query(`
-        INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
-        VALUES ($1, $2, 'AUTO_HELD', NOW() + INTERVAL '48 hours')
-        ON CONFLICT (id) DO NOTHING
-      `, [incidentId, userId]);
-
-      // 2. Blast the relayed SOS to the Police Dashboard instantly
+      // 1. Blast the relayed SOS to the Police Dashboard instantly (Zero Latency)
       const broadcastPayload = { 
         deviceUuid: userId, 
         incidentId: incidentId, 
@@ -872,9 +870,21 @@ io.on('connection', (socket) => {
         relayDeviceId: relayDeviceId
       };
       
+      io.to(incidentId).emit('incident_location_updated', broadcastPayload);
       io.emit('incident_location_updated', broadcastPayload);
       io.emit('new_incident', broadcastPayload);
       console.log(`[MESH RELAY] SOS broadcasted to Police Dashboard via incident_location_updated & new_incident!`);
+
+      // 2. Safe DB insert
+      try {
+        await pool.query(`
+          INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
+          VALUES ($1, $2, 'AUTO_HELD', NOW() + INTERVAL '48 hours')
+          ON CONFLICT (id) DO NOTHING
+        `, [incidentId, userId]);
+      } catch (dbErr) {
+        console.warn('[MESH RELAY] DB insert skipped (pilot demo schema):', dbErr);
+      }
     } catch (e) {
       console.error('[MESH RELAY] Failed to process relay via socket:', e);
     }
