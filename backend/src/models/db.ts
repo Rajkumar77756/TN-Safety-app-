@@ -130,8 +130,13 @@ export const initDb = async () => {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS patrol_officers (
         id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
         phone_number VARCHAR(50) UNIQUE NOT NULL,
         badge_number VARCHAR(100) UNIQUE NOT NULL,
+        station_name VARCHAR(255) NOT NULL,
+        pincode VARCHAR(20) NOT NULL,
+        photo_base64 TEXT,
+        emergency_contact VARCHAR(50),
         status VARCHAR(50) DEFAULT 'PENDING', -- PENDING, VERIFIED, REJECTED, REVOKED
         phone_verified BOOLEAN DEFAULT FALSE,
         is_on_duty BOOLEAN DEFAULT FALSE,
