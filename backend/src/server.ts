@@ -369,6 +369,53 @@ function decodeMeshPayload(encryptedPayloadBase64: string): { lat: number, lng: 
   }
 }
 
+async function dispatchToPatrolOfficers(incidentId: string, lat: number, lng: number, timestamp: string, senderProfile: any) {
+  try {
+    // 1. PostGIS spatial query: find verified on-duty officers within 10km
+    let nearestOfficers = await pool.query(`
+      SELECT id, phone_number, badge_number 
+      FROM patrol_officers 
+      WHERE status = 'VERIFIED' AND is_on_duty = TRUE
+      AND location IS NOT NULL
+      AND ST_DWithin(
+        location, 
+        ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 
+        10000 -- 10km radius
+      )
+    `, [lng, lat]);
+
+    // 2. Testing fallback: if no officers within 10km, alert all on-duty verified officers
+    if (nearestOfficers.rows.length === 0) {
+      nearestOfficers = await pool.query(`
+        SELECT id, phone_number, badge_number 
+        FROM patrol_officers 
+        WHERE status = 'VERIFIED' AND is_on_duty = TRUE
+      `);
+    }
+
+    for (const officer of nearestOfficers.rows) {
+      io.to(`patrol_${officer.id}`).emit('dispatch_patrol', {
+        incidentId,
+        lat,
+        lng,
+        timestamp: timestamp || new Date().toISOString(),
+        senderProfile: senderProfile || { name: 'Emergency SOS Victim', phone_number: 'Confidential' }
+      });
+      
+      try {
+        await pool.query(`
+          INSERT INTO dispatch_log (officer_id, incident_id)
+          VALUES ($1, $2)
+        `, [officer.id, incidentId]);
+      } catch (logErr) {}
+
+      console.log(`[PATROL DISPATCH] Dispatched incident ${incidentId} to Officer Badge: ${officer.badge_number}`);
+    }
+  } catch (e) {
+    console.error('[PATROL DISPATCH] Failed to dispatch to patrol officers:', e);
+  }
+}
+
 app.post('/api/mesh/relay', async (req, res) => {
   const { relayDeviceId, encryptedPayload } = req.body;
   
@@ -405,7 +452,10 @@ app.post('/api/mesh/relay', async (req, res) => {
     io.emit('incident_location_updated', broadcastPayload);
     io.emit('new_incident', broadcastPayload);
 
-    // 2. Safe DB insert (fire-and-forget, won't block the alert)
+    // 2. Dispatch to nearby patrol officers on the mobile patrol app!
+    dispatchToPatrolOfficers(incidentId, lat, lng, timestamp, { name: 'Offline BLE SOS Victim', phone_number: 'Mesh Bounced' });
+
+    // 3. Safe DB insert (fire-and-forget, won't block the alert)
     try {
       await pool.query(`
         INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
@@ -627,13 +677,15 @@ io.use(async (socket, next) => {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // Track Multi-session Active Patrol Sockets
+  // Track Multi-session Active Patrol Sockets and join dispatch room
   if (socket.data.role === 'PATROL' && socket.data.patrolId) {
     const pId = socket.data.patrolId;
+    socket.join(`patrol_${pId}`);
     if (!activePatrolSockets.has(pId)) {
       activePatrolSockets.set(pId, new Set());
     }
     activePatrolSockets.get(pId)!.add(socket);
+    console.log(`[PATROL] Officer ${pId} joined dispatch channel patrol_${pId}`);
   }
 
   // Handle Patrol Location Pings (Overwrite-in-place + Geography update)
@@ -754,39 +806,14 @@ io.on('connection', (socket) => {
     };
     io.to(incidentId).emit('incident_location_updated', broadcastPayload);
 
-    // 2. Dispatch to Patrol Officers (PostGIS spatial query via GiST Indexed Column)
-    try {
-      const nearestOfficers = await pool.query(`
-        SELECT id, phone_number as email, badge_number 
-        FROM patrol_officers 
-        WHERE status = 'VERIFIED' AND is_on_duty = TRUE
-        AND location IS NOT NULL
-        AND ST_DWithin(
-          location, 
-          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 
-          5000 -- 5km radius in meters
-        )
-      `, [payload.longitude, payload.latitude]);
-
-      // Emit strictly minimized payload to nearby officers and log dispatch
-      for (const officer of nearestOfficers.rows) {
-        io.to(`patrol_${officer.id}`).emit('dispatch_patrol', {
-          incidentId: incidentId,
-          lat: payload.latitude,
-          lng: payload.longitude
-        });
-        
-        // DPDP COMPLIANCE: Record dispatch event with lifecycle tied to incident
-        await pool.query(`
-          INSERT INTO dispatch_log (officer_id, incident_id)
-          VALUES ($1, $2)
-        `, [officer.id, incidentId]);
-
-        console.log(`Dispatched SOS to Officer Badge: ${officer.badge_number}`);
-      }
-    } catch (e) {
-      console.error('Failed to dispatch to patrol officers via PostGIS:', e);
-    }
+    // 2. Dispatch to Patrol Officers (PostGIS spatial query + testing fallback)
+    await dispatchToPatrolOfficers(
+      incidentId, 
+      payload.latitude, 
+      payload.longitude, 
+      payload.timestamp || new Date().toISOString(), 
+      senderProfile
+    );
 
     // 2.5. Dispatch to Civilian Trusted Contacts (Peer-to-Peer Routing)
     try {
@@ -875,7 +902,10 @@ io.on('connection', (socket) => {
       io.emit('new_incident', broadcastPayload);
       console.log(`[MESH RELAY] SOS broadcasted to Police Dashboard via incident_location_updated & new_incident!`);
 
-      // 2. Safe DB insert
+      // 2. Dispatch to nearby patrol officers on the mobile patrol app!
+      dispatchToPatrolOfficers(incidentId, lat, lng, timestamp, { name: 'Offline BLE SOS Victim', phone_number: 'Mesh Bounced' });
+
+      // 3. Safe DB insert
       try {
         await pool.query(`
           INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
