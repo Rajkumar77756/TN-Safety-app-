@@ -1,16 +1,17 @@
 {
   "expo": {
-    "name": "expo-patrol",
-    "slug": "expo-patrol",
+    "name": "Thunai Patrol",
+    "slug": "thunai-patrol",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "expopatrol",
+    "scheme": "thunaipatrol",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.rajkumar.thunai.patrol",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
