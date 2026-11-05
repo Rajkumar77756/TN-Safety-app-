@@ -239,7 +239,8 @@ export default function Home() {
     });
 
     // Listen for new or updated incident locations (Immediate zero-latency broadcast)
-    newSocket.on("incident_location_updated", (payload: any) => {
+    const handleIncomingIncident = (payload: any) => {
+      if (!payload || !payload.incidentId) return;
       setIncidents((prev) => {
         // If it's a completely new incident, default status to ACTIVE
         const existingStatus = prev[payload.incidentId]?.status || 'ACTIVE';
@@ -248,7 +249,10 @@ export default function Home() {
           [payload.incidentId]: { ...payload, status: existingStatus },
         };
       });
-    });
+    };
+
+    newSocket.on("incident_location_updated", handleIncomingIncident);
+    newSocket.on("new_incident", handleIncomingIncident);
 
     // Listen for asynchronous district resolution
     newSocket.on("incident_district_resolved", (payload: { incidentId: string, district: string }) => {

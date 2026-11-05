@@ -325,32 +325,64 @@ app.get('/api/civilian/profile/:phone', async (req, res) => {
   }
 });
 
-// --- MESH NETWORK RELAY API ---
+// --- MESH NETWORK RELAY DECODER & API ---
+const BLE_SECRET_KEY = Buffer.from('thunai_securekey', 'utf8'); // 16 bytes
+const BLE_IV = Buffer.from('thunai_secure_iv', 'utf8'); // 16 bytes
+
+function decodeMeshPayload(encryptedPayloadBase64: string): { lat: number, lng: number, timestamp: string, userId: string } | null {
+  try {
+    const rawBuf = Buffer.from(encryptedPayloadBase64, 'base64');
+    if (rawBuf.length < 16) return null;
+
+    let buf = rawBuf;
+    // Attempt AES-128-CBC decryption first
+    try {
+      const decipher = crypto.createDecipheriv('aes-128-cbc', BLE_SECRET_KEY, BLE_IV);
+      decipher.setAutoPadding(false);
+      const decrypted = Buffer.concat([decipher.update(rawBuf), decipher.final()]);
+      const testLat = decrypted.readFloatLE(0);
+      const testLng = decrypted.readFloatLE(4);
+      if (!isNaN(testLat) && testLat >= -90 && testLat <= 90 && !isNaN(testLng) && testLng >= -180 && testLng <= 180) {
+        buf = decrypted;
+      }
+    } catch (e) {
+      // Fallback to checking rawBuf directly
+    }
+
+    const lat = buf.readFloatLE(0);
+    const lng = buf.readFloatLE(4);
+    const timestampSecs = buf.readUInt32LE(8);
+    const userIdHash = buf.readUInt32LE(12);
+
+    if (isNaN(lat) || lat < -90 || lat > 90 || isNaN(lng) || lng < -180 || lng > 180) {
+      console.warn(`[MESH RELAY] Invalid coordinates: lat=${lat}, lng=${lng}`);
+      return null;
+    }
+
+    const userId = 'victim_' + (userIdHash || 'unknown');
+    const timestamp = timestampSecs > 1500000000 ? new Date(timestampSecs * 1000).toISOString() : new Date().toISOString();
+
+    return { lat, lng, timestamp, userId };
+  } catch (err) {
+    console.error('[MESH RELAY] Decode error:', err);
+    return null;
+  }
+}
+
 app.post('/api/mesh/relay', async (req, res) => {
   const { relayDeviceId, encryptedPayload } = req.body;
   
   if (!encryptedPayload) return res.status(400).json({ error: 'Missing encrypted payload' });
 
   try {
-    // In a production environment, this is where the Cloud Backend uses its Private Key
-    // to decrypt the BLE Manufacturer Data payload that the stranger relayed to us.
-    // For this pilot, the payload is a raw 16-byte Buffer encoded as Base64.
-    const buf = Buffer.from(encryptedPayload, 'base64');
-    
-    if (buf.length < 16) {
-      return res.status(400).json({ error: 'Invalid payload length' });
+    const decoded = decodeMeshPayload(encryptedPayload);
+    if (!decoded) {
+      return res.status(400).json({ error: 'Invalid or corrupted mesh payload' });
     }
-    
-    const lat = buf.readFloatLE(0);
-    const lng = buf.readFloatLE(4);
-    const timestampSecs = buf.readUInt32LE(8);
-    const userIdHash = buf.readUInt32LE(12);
-    
-    const userId = 'user_' + userIdHash;
-    const timestamp = new Date(timestampSecs * 1000).toISOString();
-    
-    console.log(`[MESH RELAY] Anonymous Relay ${relayDeviceId} successfully bounced an offline SOS!`);
-    console.log(`[MESH RELAY] Decoded Binary Victim Data: UUID: ${userId}, Lat: ${lat}, Lng: ${lng}`);
+
+    const { lat, lng, timestamp, userId } = decoded;
+    console.log(`[MESH RELAY via HTTP] Anonymous Relay ${relayDeviceId} bounced offline SOS!`);
+    console.log(`[MESH RELAY] Decoded Victim: ${userId}, Lat: ${lat}, Lng: ${lng}, Time: ${timestamp}`);
 
     const incidentId = 'GLOBAL_TEST_INCIDENT';
 
@@ -361,12 +393,7 @@ app.post('/api/mesh/relay', async (req, res) => {
       ON CONFLICT (id) DO NOTHING
     `, [incidentId, userId]);
 
-    // 2. Fetch the victim's civilian profile
-    let senderProfile = null;
-    // We don't transmit senderPhone in the tight 16-byte binary payload to save space.
-    // In a real app, the backend would lookup the phone number using the userId.
-
-    // 3. Blast the SOS to the Police Dashboard instantly
+    // 2. Broadcast to Police Dashboard
     const broadcastPayload = { 
       deviceUuid: userId, 
       incidentId: incidentId, 
@@ -375,17 +402,19 @@ app.post('/api/mesh/relay', async (req, res) => {
       timestamp: timestamp,
       trustStatus: 'ACTIVE',
       district: null,
-      senderProfile: senderProfile
+      senderProfile: null,
+      meshRelay: true,
+      relayDeviceId: relayDeviceId
     };
     
-    // We emit to everyone because the web dashboard listens globally for incident_location_updated
+    // Broadcast via both event names for maximum dashboard and client compatibility
     io.emit('incident_location_updated', broadcastPayload);
+    io.emit('new_incident', broadcastPayload);
 
     res.json({ success: true, message: 'Mesh Relay Processed' });
   } catch (e) {
-    // If decryption fails or payload is malformed, we just drop it to prevent spam
-    console.error('[MESH RELAY] Dropped invalid packet', e);
-    res.status(400).json({ error: 'Invalid packet' });
+    console.error('[MESH RELAY] Failed to process HTTP relay:', e);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -805,32 +834,31 @@ io.on('connection', (socket) => {
 
   // Handle Mesh Relay from Bystander Phones (Offline SOS forwarding via BLE)
   socket.on('mesh-relay', async (payload) => {
-    console.log('[MESH RELAY via Socket] Received relay from bystander:', payload.relayDeviceId);
+    console.log('[MESH RELAY via Socket] Received relay from bystander:', payload?.relayDeviceId);
     
-    const { relayDeviceId, encryptedPayload, relayTimestamp } = payload;
+    const { relayDeviceId, encryptedPayload, relayTimestamp } = payload || {};
     if (!encryptedPayload) return;
 
     try {
-      const buf = Buffer.from(encryptedPayload, 'base64');
-      
-      if (buf.length < 16) {
-        console.error('[MESH RELAY] Invalid payload length');
+      const decoded = decodeMeshPayload(encryptedPayload);
+      if (!decoded) {
+        console.error('[MESH RELAY via Socket] Dropped invalid or corrupted mesh payload');
         return;
       }
-      
-      const lat = buf.readFloatLE(0);
-      const lng = buf.readFloatLE(4);
-      const timestampSecs = buf.readUInt32LE(8);
-      const userIdHash = buf.readUInt32LE(12);
-      
-      const userId = 'user_' + userIdHash;
-      const timestamp = new Date(timestampSecs * 1000).toISOString();
-      
-      console.log(`[MESH RELAY] Decoded: Victim=${userId}, Lat=${lat}, Lng=${lng}`);
 
-      const incidentId = `mesh_${userId}_${timestampSecs}`;
+      const { lat, lng, timestamp, userId } = decoded;
+      console.log(`[MESH RELAY via Socket] Decoded: Victim=${userId}, Lat=${lat}, Lng=${lng}, Time=${timestamp}`);
 
-      // Blast the relayed SOS to the Police Dashboard
+      const incidentId = 'GLOBAL_TEST_INCIDENT';
+
+      // 1. Log incident into DB
+      await pool.query(`
+        INSERT INTO incidents (id, device_uuid, legal_hold_state, legal_hold_expires_at)
+        VALUES ($1, $2, 'AUTO_HELD', NOW() + INTERVAL '48 hours')
+        ON CONFLICT (id) DO NOTHING
+      `, [incidentId, userId]);
+
+      // 2. Blast the relayed SOS to the Police Dashboard instantly
       const broadcastPayload = { 
         deviceUuid: userId, 
         incidentId: incidentId, 
@@ -844,10 +872,11 @@ io.on('connection', (socket) => {
         relayDeviceId: relayDeviceId
       };
       
+      io.emit('incident_location_updated', broadcastPayload);
       io.emit('new_incident', broadcastPayload);
-      console.log(`[MESH RELAY] SOS broadcasted to Police Dashboard!`);
+      console.log(`[MESH RELAY] SOS broadcasted to Police Dashboard via incident_location_updated & new_incident!`);
     } catch (e) {
-      console.error('[MESH RELAY] Failed to process relay:', e);
+      console.error('[MESH RELAY] Failed to process relay via socket:', e);
     }
   });
 
