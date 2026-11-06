@@ -9,6 +9,7 @@
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist"
   },
+  "include": ["src/**/*"],
   "ts-node": {
     "transpileOnly": true
   }

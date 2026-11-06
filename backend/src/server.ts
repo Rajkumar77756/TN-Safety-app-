@@ -118,6 +118,22 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
   }
 };
 
+// Middleware to require DISPATCHER, ADMIN, or verified PATROL officer
+const requireDispatcherOrOfficer = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token || !process.env.JWT_SECRET) return res.status(401).json({ error: 'Unauthorized: Missing token' });
+  try {
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role !== 'ADMIN' && decoded.role !== 'DISPATCHER' && decoded.role !== 'PATROL') {
+      return res.status(403).json({ error: 'Forbidden: Dispatcher or Patrol Officer credentials required' });
+    }
+    (req as any).user = decoded;
+    next();
+  } catch (e) {
+    res.status(401).json({ error: 'Invalid or expired token' });
+  }
+};
+
 app.get('/api/admin/officers', requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(`SELECT id, phone_number as email, badge_number, status, last_active, phone_number FROM patrol_officers ORDER BY id DESC`);
@@ -197,9 +213,15 @@ app.post('/api/admin/officers/revoke', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/dispatch/incident/:id/status', async (req, res) => {
+app.post('/api/dispatch/incident/:id/status', requireDispatcherOrOfficer, async (req, res) => {
   const { id } = req.params;
   const { status, notes } = req.body;
+
+  const validStatuses = ['ACTIVE', 'ANSWERED', 'CANCELLED_BY_USER'];
+  if (!status || !validStatuses.includes(status)) {
+    return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+  }
+
   try {
     await pool.query(`UPDATE incidents SET status = $1, legal_hold_state = 'RELEASED' WHERE id = $2`, [status, id]);
     
@@ -207,7 +229,7 @@ app.post('/api/dispatch/incident/:id/status', async (req, res) => {
     io.emit('incident_location_updated', {
       incidentId: id,
       status: status,
-      notes: notes,
+      notes: notes || '',
       timestamp: new Date().toISOString()
     });
     
@@ -290,8 +312,32 @@ app.get('/api/admin/incidents/:id/audio', requireAdmin, (req, res) => {
 app.post('/api/civilian/profile', async (req, res) => {
   const { phoneNumber, name, age, currentAddress, workplaceDetails, photoBase64 } = req.body;
   
-  if (!phoneNumber || !name) {
-    return res.status(400).json({ error: 'Phone number and name are required' });
+  if (!phoneNumber || typeof phoneNumber !== 'string') {
+    return res.status(400).json({ error: 'Phone number is required' });
+  }
+
+  // Strict Phone Validation: 10-15 digits, optional leading +, strictly rejecting words/letters
+  const cleanPhone = phoneNumber.trim();
+  if (!/^\+?[0-9]{10,15}$/.test(cleanPhone)) {
+    return res.status(400).json({ 
+      error: 'Invalid phone number: Must contain only numbers (10 to 15 digits). Letters and words are not accepted.' 
+    });
+  }
+
+  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+    return res.status(400).json({ error: 'Full Name is required and must be at least 2 characters.' });
+  }
+
+  // Strict Age Validation: must be integer 1-120 or null. Reject letters and words.
+  let parsedAge: number | null = null;
+  if (age !== undefined && age !== null && age !== '') {
+    const numAge = Number(age);
+    if (!Number.isInteger(numAge) || numAge < 1 || numAge > 120) {
+      return res.status(400).json({ 
+        error: 'Invalid age: Must be a valid number between 1 and 120. Letters and words are not accepted.' 
+      });
+    }
+    parsedAge = numAge;
   }
 
   try {
@@ -306,18 +352,23 @@ app.post('/api/civilian/profile', async (req, res) => {
         workplace_details = EXCLUDED.workplace_details,
         photo_base64 = EXCLUDED.photo_base64,
         updated_at = CURRENT_TIMESTAMP
-    `, [phoneNumber, name, age || null, currentAddress || null, workplaceDetails || null, photoBase64 || null]);
+    `, [cleanPhone, name.trim(), parsedAge, currentAddress?.trim() || null, workplaceDetails?.trim() || null, photoBase64 || null]);
     
-    res.json({ success: true });
+    res.json({ success: true, message: 'Identity profile saved securely' });
   } catch (e) {
     console.error('Failed to save civilian profile', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-app.get('/api/civilian/profile/:phone', async (req, res) => {
+// Protect civilian profile lookup from unauthorized scrapers (Information Leakage Prevention)
+app.get('/api/civilian/profile/:phone', requireDispatcherOrOfficer, async (req, res) => {
+  const phone = String(req.params.phone || '').trim();
+  if (!phone || !/^\+?[0-9]{10,15}$/.test(phone)) {
+    return res.status(400).json({ error: 'Invalid phone number format. Numbers only (10-15 digits).' });
+  }
   try {
-    const result = await pool.query('SELECT * FROM civilian_profiles WHERE phone_number = $1', [req.params.phone]);
+    const result = await pool.query('SELECT name, phone_number, age, current_address, workplace_details, photo_base64 FROM civilian_profiles WHERE phone_number = $1', [phone]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
     res.json(result.rows[0]);
   } catch (e) {
@@ -478,25 +529,45 @@ app.post('/api/patrol/login', async (req, res) => {
   const { phoneNumber, badgeNumber, name, stationName, pincode } = req.body;
   
   if (!phoneNumber || !badgeNumber) {
-    return res.status(403).json({ error: 'Phone number and badge number are required' });
+    return res.status(400).json({ error: 'Phone number and badge number are required' });
+  }
+
+  const cleanPhone = String(phoneNumber).trim();
+  if (!/^\+?[0-9]{10,15}$/.test(cleanPhone)) {
+    return res.status(400).json({ 
+      error: 'Invalid phone number: Must contain only numbers (10 to 15 digits). Letters and words are not accepted.' 
+    });
+  }
+
+  const cleanBadge = String(badgeNumber).trim();
+  if (cleanBadge.length < 2 || cleanBadge.length > 50) {
+    return res.status(400).json({ error: 'Invalid badge number length (2-50 characters).' });
   }
 
   try {
     // Upsert the officer into the DB
-    let result = await pool.query(`SELECT id, status FROM patrol_officers WHERE phone_number = $1`, [phoneNumber]);
+    let result = await pool.query(`SELECT id, status FROM patrol_officers WHERE phone_number = $1`, [cleanPhone]);
     let officerId;
     let status;
 
     if (result.rows.length === 0) {
       if (!name || !stationName || !pincode) {
-         return res.status(400).json({ error: 'Name, Station, and Pincode are required for new registration' });
+         return res.status(400).json({ error: 'Name, Station Name, and 6-digit Pincode are required for registration' });
       }
+
+      const cleanPincode = String(pincode).trim();
+      if (!/^\d{6}$/.test(cleanPincode)) {
+        return res.status(400).json({ 
+          error: 'Invalid pincode: Must be a 6-digit number. Letters and words are not accepted.' 
+        });
+      }
+
       // New signup
       const insert = await pool.query(`
         INSERT INTO patrol_officers (phone_number, badge_number, name, station_name, pincode, phone_verified, status)
         VALUES ($1, $2, $3, $4, $5, TRUE, 'PENDING') -- Simulated OTP success
         RETURNING id, status
-      `, [phoneNumber, badgeNumber, name, stationName, pincode]);
+      `, [cleanPhone, cleanBadge, String(name).trim(), String(stationName).trim(), cleanPincode]);
       officerId = insert.rows[0].id;
       status = insert.rows[0].status;
     } else {
@@ -537,7 +608,18 @@ app.post('/api/patrol/profile', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
     if (decoded.role !== 'PATROL') return res.status(403).json({ error: 'Forbidden' });
     const { photoBase64, emergencyContact } = req.body;
-    await pool.query('UPDATE patrol_officers SET photo_base64 = $1, emergency_contact = $2 WHERE id = $3', [photoBase64, emergencyContact, decoded.patrolId]);
+
+    let cleanContact: string | null = null;
+    if (emergencyContact) {
+      cleanContact = String(emergencyContact).trim();
+      if (!/^\+?[0-9]{10,15}$/.test(cleanContact)) {
+        return res.status(400).json({ 
+          error: 'Invalid emergency contact: Must contain only numbers (10 to 15 digits). Letters and words are not accepted.' 
+        });
+      }
+    }
+
+    await pool.query('UPDATE patrol_officers SET photo_base64 = $1, emergency_contact = $2 WHERE id = $3', [photoBase64 || null, cleanContact, decoded.patrolId]);
     res.json({ success: true });
   } catch (e) { res.status(401).json({ error: 'Invalid token' }); }
 });

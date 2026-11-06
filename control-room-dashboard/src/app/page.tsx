@@ -309,7 +309,10 @@ export default function Home() {
     try {
       await fetch(`${SERVER_URL}/api/dispatch/incident/${incidentId}/status`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
         body: JSON.stringify({ status: 'ANSWERED', notes: dispatcherNotes })
       });
       setDispatcherNotes("");
