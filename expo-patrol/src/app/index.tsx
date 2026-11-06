@@ -49,7 +49,7 @@ export default function PatrolScreen() {
   const [emergencyContact, setEmergencyContact] = useState('');
 
   const mapRef = useRef<MapView | null>(null);
-  const locationInterval = useRef<NodeJS.Timeout | null>(null);
+  const locationInterval = useRef<any>(null);
 
   // Animation values
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -214,11 +214,27 @@ export default function PatrolScreen() {
       return Alert.alert('Error', 'Please fill all fields for Singapen Padai registration.');
     }
 
+    const cleanPhone = phoneNumber.trim();
+    if (!/^\+?[0-9]{10,15}$/.test(cleanPhone)) {
+      return Alert.alert(
+        'Invalid Phone Number',
+        'Phone number must contain only numbers (10 to 15 digits). Words and letters are not accepted.'
+      );
+    }
+
+    const cleanPincode = pincode.trim();
+    if (!/^\d{6}$/.test(cleanPincode)) {
+      return Alert.alert(
+        'Invalid Pincode',
+        'Station Pincode must be a 6-digit number. Words and letters are not accepted.'
+      );
+    }
+
     try {
       const res = await fetch(`${SERVER_URL}/api/patrol/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber, badgeNumber, name, stationName, pincode })
+        body: JSON.stringify({ phoneNumber: cleanPhone, badgeNumber: badgeNumber.trim(), name: name.trim(), stationName: stationName.trim(), pincode: cleanPincode })
       });
       const data = await res.json();
       
@@ -226,11 +242,11 @@ export default function PatrolScreen() {
         setToken(data.token);
         // Persist session
         await SecureStore.setItemAsync('patrol_jwt_token', data.token);
-        await SecureStore.setItemAsync('patrol_phone', phoneNumber);
-        await SecureStore.setItemAsync('patrol_badge', badgeNumber);
-        await SecureStore.setItemAsync('patrol_name', name);
-        await SecureStore.setItemAsync('patrol_station', stationName);
-        await SecureStore.setItemAsync('patrol_pincode', pincode);
+        await SecureStore.setItemAsync('patrol_phone', cleanPhone);
+        await SecureStore.setItemAsync('patrol_badge', badgeNumber.trim());
+        await SecureStore.setItemAsync('patrol_name', name.trim());
+        await SecureStore.setItemAsync('patrol_station', stationName.trim());
+        await SecureStore.setItemAsync('patrol_pincode', cleanPincode);
 
         if (data.status === 'VERIFIED') {
           setIsVerified(true);
@@ -305,17 +321,33 @@ export default function PatrolScreen() {
   };
 
   const saveProfile = async () => {
+    let cleanContact: string | null = null;
+    if (emergencyContact && emergencyContact.trim()) {
+      cleanContact = emergencyContact.trim();
+      if (!/^\+?[0-9]{10,15}$/.test(cleanContact)) {
+        return Alert.alert(
+          'Invalid Emergency Contact',
+          'Emergency contact must contain only numbers (10 to 15 digits). Letters and words are not accepted.'
+        );
+      }
+    }
+
     try {
-      await fetch(`${SERVER_URL}/api/patrol/profile`, {
+      const res = await fetch(`${SERVER_URL}/api/patrol/profile`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}` 
         },
-        body: JSON.stringify({ photoBase64, emergencyContact })
+        body: JSON.stringify({ photoBase64, emergencyContact: cleanContact })
       });
-      Alert.alert('Success', 'Profile settings saved.');
-      setShowSettings(false);
+      if (res.ok) {
+        Alert.alert('Success', 'Profile settings saved.');
+        setShowSettings(false);
+      } else {
+        const data = await res.json();
+        Alert.alert('Save Failed', data.error || 'Failed to save settings.');
+      }
     } catch (e) {
       Alert.alert('Error', 'Failed to save settings.');
     }
@@ -396,11 +428,11 @@ export default function PatrolScreen() {
           />
           <TextInput
             style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
-            placeholder="Officer Phone Number"
+            placeholder="Officer Phone Number (Digits only)"
             placeholderTextColor={theme.textSecondary}
             keyboardType="phone-pad"
             value={phoneNumber}
-            onChangeText={setPhoneNumber}
+            onChangeText={text => setPhoneNumber(text.replace(/[^0-9+]/g, ''))}
             autoCapitalize="none"
           />
           <TextInput
@@ -419,11 +451,12 @@ export default function PatrolScreen() {
           />
           <TextInput
             style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
-            placeholder="Station Pincode"
+            placeholder="Station Pincode (6 digits)"
             placeholderTextColor={theme.textSecondary}
             keyboardType="number-pad"
+            maxLength={6}
             value={pincode}
-            onChangeText={setPincode}
+            onChangeText={text => setPincode(text.replace(/[^0-9]/g, '').slice(0, 6))}
           />
           
           <TouchableOpacity style={styles.loginBtn} onPress={handleLogin}>
@@ -439,7 +472,7 @@ export default function PatrolScreen() {
             </View>
           )}
 
-          <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={() => router.push('/privacy-policy')}>
+          <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={() => router.push('/privacy-policy' as any)}>
             <Text style={{ color: theme.textSecondary, textDecorationLine: 'underline' }}>Privacy Policy</Text>
           </TouchableOpacity>
         </View>
@@ -601,11 +634,11 @@ export default function PatrolScreen() {
           <Text style={{ color: theme.textSecondary, marginBottom: 5 }}>Emergency Contact (Partner / Station)</Text>
           <TextInput
             style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
-            placeholder="E.g. +91 9876543210"
+            placeholder="E.g. +91 9876543210 (Digits only)"
             placeholderTextColor={theme.textSecondary}
             keyboardType="phone-pad"
             value={emergencyContact}
-            onChangeText={setEmergencyContact}
+            onChangeText={text => setEmergencyContact(text.replace(/[^0-9+]/g, ''))}
           />
 
           <TouchableOpacity style={styles.saveBtn} onPress={saveProfile}>
@@ -616,7 +649,7 @@ export default function PatrolScreen() {
             <Text style={styles.logoutBtnText}>LOGOUT / SWITCH OFFICER</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={() => router.push('/privacy-policy')}>
+          <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={() => router.push('/privacy-policy' as any)}>
              <Text style={{ color: theme.textSecondary, textDecorationLine: 'underline' }}>Privacy Policy</Text>
           </TouchableOpacity>
 

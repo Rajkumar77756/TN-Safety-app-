@@ -68,32 +68,61 @@ export default function ProfileScreen() {
 
   const saveProfile = async () => {
     if (!phone || !name) {
-      Alert.alert('Error', 'Phone number and Full Name are strictly required to use the peer-to-peer SOS network.');
+      Alert.alert('Required Fields', 'Phone number and Full Name are strictly required to use the peer-to-peer SOS network.');
       return;
+    }
+
+    const cleanPhone = phone.trim();
+    if (!/^\+?[0-9]{10,15}$/.test(cleanPhone)) {
+      Alert.alert(
+        'Invalid Phone Number',
+        'Phone number must contain only numbers (10 to 15 digits). Letters and words are not accepted.'
+      );
+      return;
+    }
+
+    let parsedAge: number | null = null;
+    if (age && age.trim()) {
+      const numAge = Number(age.trim());
+      if (!Number.isInteger(numAge) || numAge < 1 || numAge > 120) {
+        Alert.alert(
+          'Invalid Age',
+          'Age must be a valid number between 1 and 120. Letters and words are not accepted.'
+        );
+        return;
+      }
+      parsedAge = numAge;
     }
 
     setIsSaving(true);
     try {
       // 1. Save locally FIRST so data never vanishes
-      await SecureStore.setItemAsync('user_phone', phone);
-      await SecureStore.setItemAsync('user_name', name);
-      await SecureStore.setItemAsync('user_age', age);
-      await SecureStore.setItemAsync('user_address', address);
-      await SecureStore.setItemAsync('user_workplace', workplace);
+      await SecureStore.setItemAsync('user_phone', cleanPhone);
+      await SecureStore.setItemAsync('user_name', name.trim());
+      if (parsedAge !== null) {
+        await SecureStore.setItemAsync('user_age', String(parsedAge));
+      }
+      if (address.trim()) {
+        await SecureStore.setItemAsync('user_address', address.trim());
+      }
+      if (workplace.trim()) {
+        await SecureStore.setItemAsync('user_workplace', workplace.trim());
+      }
       if (photoBase64) {
         await SecureStore.setItemAsync('user_photo_base64', photoBase64);
       }
+      await SecureStore.setItemAsync('user_profile_completed', 'true');
 
       // 2. Sync to backend silently (don't throw error to user if server is sleeping)
       fetch(`${SERVER_URL}/api/civilian/profile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          phoneNumber: phone,
-          name: name,
-          age: age ? parseInt(age) : null,
-          currentAddress: address,
-          workplaceDetails: workplace,
+          phoneNumber: cleanPhone,
+          name: name.trim(),
+          age: parsedAge,
+          currentAddress: address.trim(),
+          workplaceDetails: workplace.trim(),
           photoBase64: photoBase64
         })
       }).catch(err => console.log('Backend sync delayed:', err));
@@ -142,14 +171,14 @@ export default function ProfileScreen() {
       </View>
 
       <View style={styles.formGroup}>
-        <Text style={styles.label}>Phone Number (Required)</Text>
+        <Text style={styles.label}>Phone Number (Required, Numbers Only)</Text>
         <TextInput 
           style={styles.input} 
           placeholder="e.g. 9952775428"
           placeholderTextColor="#666"
           keyboardType="phone-pad"
           value={phone}
-          onChangeText={setPhone}
+          onChangeText={text => setPhone(text.replace(/[^0-9+]/g, ''))}
         />
       </View>
 
@@ -165,14 +194,15 @@ export default function ProfileScreen() {
       </View>
 
       <View style={styles.formGroup}>
-        <Text style={styles.label}>Age</Text>
+        <Text style={styles.label}>Age (Numbers Only)</Text>
         <TextInput 
           style={styles.input} 
           placeholder="e.g. 24"
           placeholderTextColor="#666"
           keyboardType="numeric"
+          maxLength={3}
           value={age}
-          onChangeText={setAge}
+          onChangeText={text => setAge(text.replace(/[^0-9]/g, ''))}
         />
       </View>
 

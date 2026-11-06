@@ -12,6 +12,18 @@ module.exports = function withStealthMode(config) {
     androidManifest['uses-permission'].push({
       $: { 'android:name': 'android.permission.SYSTEM_ALERT_WINDOW' }
     });
+    androidManifest['uses-permission'].push({
+      $: { 'android:name': 'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS' }
+    });
+    androidManifest['uses-permission'].push({
+      $: { 'android:name': 'android.permission.FOREGROUND_SERVICE' }
+    });
+    androidManifest['uses-permission'].push({
+      $: { 'android:name': 'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE' }
+    });
+    androidManifest['uses-permission'].push({
+      $: { 'android:name': 'android.permission.WAKE_LOCK' }
+    });
 
     // Add Services to Application
     if (!application.service) {
@@ -41,6 +53,15 @@ module.exports = function withStealthMode(config) {
       $: {
         'android:name': 'com.rajkumar.thunai.stealthmode.FakePowerMenuService',
         'android:exported': 'false'
+      }
+    });
+
+    // Persistent Offline BLE Mesh Service
+    application.service.push({
+      $: {
+        'android:name': 'com.rajkumar.thunai.stealthmode.BleMeshService',
+        'android:exported': 'false',
+        'android:foregroundServiceType': 'connectedDevice'
       }
     });
 

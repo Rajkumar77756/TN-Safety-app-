@@ -44,6 +44,16 @@ export default function HomeScreen() {
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
 
+  // Onboarding Identity Gate State
+  const [isProfileComplete, setIsProfileComplete] = useState<boolean | null>(null);
+  const [onboardingName, setOnboardingName] = useState('');
+  const [onboardingPhone, setOnboardingPhone] = useState('');
+  const [onboardingAge, setOnboardingAge] = useState('');
+  const [onboardingAddress, setOnboardingAddress] = useState('');
+  const [onboardingWorkplace, setOnboardingWorkplace] = useState('');
+  const [onboardingContactName, setOnboardingContactName] = useState('');
+  const [onboardingContactPhone, setOnboardingContactPhone] = useState('');
+
   // New Profile & Settings State
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
@@ -70,13 +80,34 @@ export default function HomeScreen() {
   const theme = Colors[colorScheme];
 
   useEffect(() => {
-    const checkConsent = async () => {
-      const consent = await SecureStore.getItemAsync('dpdp_consent');
-      if (!consent) {
-        router.replace('/ConsentScreen');
+    const checkConsentAndProfile = async () => {
+      try {
+        const consent = await SecureStore.getItemAsync('dpdp_consent');
+        if (!consent) {
+          router.replace('/ConsentScreen');
+          return;
+        }
+
+        const storedName = await SecureStore.getItemAsync('user_name');
+        const storedPhone = await SecureStore.getItemAsync('user_phone');
+        const storedAddress = await SecureStore.getItemAsync('user_address');
+        const storedContacts = await SecureStore.getItemAsync('trusted_contacts');
+        let contactsList: Contact[] = [];
+        if (storedContacts) {
+          try { contactsList = JSON.parse(storedContacts); } catch (e) {}
+        }
+
+        if (storedName && storedPhone && /^\+?[0-9]{10,15}$/.test(storedPhone) && storedAddress && contactsList.length > 0) {
+          setIsProfileComplete(true);
+        } else {
+          setIsProfileComplete(false);
+        }
+      } catch (e) {
+        console.error('Error checking profile completion', e);
+        setIsProfileComplete(false);
       }
     };
-    checkConsent();
+    checkConsentAndProfile();
   }, []);
 
   useEffect(() => {
@@ -122,7 +153,7 @@ export default function HomeScreen() {
     let relaySubscription: any = null;
     try {
       stealthModule = requireNativeModule('ExpoStealthMode');
-      const emitter = new ExpoEventEmitter(stealthModule);
+      const emitter: any = new ExpoEventEmitter(stealthModule);
       relaySubscription = emitter.addListener('onSosRelayReceived', async (event: any) => {
         console.log('[BLE RELAY] Received SOS from nearby victim! Forwarding to server...');
         const relayBody = {
@@ -185,14 +216,114 @@ export default function HomeScreen() {
     }
   };
 
+  const handleSaveOnboardingProfile = async () => {
+    if (!onboardingName.trim() || !onboardingPhone.trim() || !onboardingAddress.trim() || !onboardingContactName.trim() || !onboardingContactPhone.trim()) {
+      alert('Please fill in all required fields (Name, Phone, Address, and Emergency Contact) before continuing.');
+      return;
+    }
+
+    const cleanUserPhone = onboardingPhone.trim();
+    if (!/^\+?[0-9]{10,15}$/.test(cleanUserPhone)) {
+      alert('Invalid Phone Number: Phone number must contain only numbers (10 to 15 digits). Letters and words are not accepted.');
+      return;
+    }
+
+    let parsedAge: number | null = null;
+    if (onboardingAge.trim()) {
+      const num = Number(onboardingAge.trim());
+      if (!Number.isInteger(num) || num < 1 || num > 120) {
+        alert('Invalid Age: Age must be a number between 1 and 120. Letters and words are not accepted.');
+        return;
+      }
+      parsedAge = num;
+    }
+
+    const cleanContactPhone = onboardingContactPhone.trim();
+    if (!/^\+?[0-9]{10,15}$/.test(cleanContactPhone)) {
+      alert('Invalid Contact Phone: Emergency contact phone must contain only numbers (10 to 15 digits). Letters and words are not accepted.');
+      return;
+    }
+
+    try {
+      // 1. Save user identity locally
+      await SecureStore.setItemAsync('user_name', onboardingName.trim());
+      await SecureStore.setItemAsync('user_phone', cleanUserPhone);
+      if (parsedAge !== null) {
+        await SecureStore.setItemAsync('user_age', String(parsedAge));
+      }
+      await SecureStore.setItemAsync('user_address', onboardingAddress.trim());
+      if (onboardingWorkplace.trim()) {
+        await SecureStore.setItemAsync('user_workplace', onboardingWorkplace.trim());
+      }
+
+      // 2. Save primary trusted emergency contact
+      const initialContact: Contact = {
+        id: Date.now().toString(),
+        name: onboardingContactName.trim(),
+        phone: cleanContactPhone,
+        image: `https://ui-avatars.com/api/?name=${encodeURIComponent(onboardingContactName.trim())}&background=random`
+      };
+      const initialContactsList = [initialContact];
+      await SecureStore.setItemAsync('trusted_contacts', JSON.stringify(initialContactsList));
+      setContacts(initialContactsList);
+
+      // 3. Mark profile completed
+      await SecureStore.setItemAsync('user_profile_completed', 'true');
+
+      setUserProfileData({
+        name: onboardingName.trim(),
+        phone: cleanUserPhone,
+        age: parsedAge,
+        address: onboardingAddress.trim(),
+        photo: null
+      });
+
+      // 4. Sync profile to backend
+      fetch(`${SERVER_URL}/api/civilian/profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: cleanUserPhone,
+          name: onboardingName.trim(),
+          age: parsedAge,
+          currentAddress: onboardingAddress.trim(),
+          workplaceDetails: onboardingWorkplace.trim() || null,
+          photoBase64: null
+        })
+      }).catch(err => console.log('Backend sync delayed:', err));
+
+      // 5. Connect socket with verified phone
+      if (socket) {
+        socket.auth = { civilianPhone: cleanUserPhone };
+        socket.connect();
+      }
+
+      // 6. Transition to SOS page!
+      setIsProfileComplete(true);
+      alert('Identity verified and saved. Your SOS button is now active and protected.');
+    } catch (e) {
+      console.error('Failed to save profile during onboarding', e);
+      alert('Failed to save profile. Please try again.');
+    }
+  };
+
   const saveContact = async () => {
-    if (!newName.trim() || !newPhone.trim()) return;
+    if (!newName.trim() || !newPhone.trim()) {
+      alert('Please enter both name and phone number for the contact.');
+      return;
+    }
     
+    const cleanPhone = newPhone.trim();
+    if (!/^\+?[0-9]{10,15}$/.test(cleanPhone)) {
+      alert('Invalid phone number: Must contain only numbers (10 to 15 digits). Letters and words are not accepted.');
+      return;
+    }
+
     const newContact: Contact = {
       id: Date.now().toString(),
-      name: newName,
-      phone: newPhone,
-      image: `https://ui-avatars.com/api/?name=${encodeURIComponent(newName)}&background=random`
+      name: newName.trim(),
+      phone: cleanPhone,
+      image: `https://ui-avatars.com/api/?name=${encodeURIComponent(newName.trim())}&background=random`
     };
 
     const updatedContacts = [...contacts, newContact];
@@ -346,6 +477,136 @@ export default function HomeScreen() {
     }
   };
 
+  if (isProfileComplete === null) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }]}>
+        <Ionicons name="shield-checkmark" size={64} color="#ff0050" />
+        <Text style={{ color: theme.text, fontSize: 18, fontWeight: 'bold', marginTop: 15 }}>Thunai Emergency Guardian</Text>
+        <Text style={{ color: theme.textSecondary, fontSize: 13, marginTop: 5 }}>Securing local encryption...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (!isProfileComplete) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+          <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+            <View style={{ alignItems: 'center', marginBottom: 24, marginTop: 10 }}>
+              <View style={{ width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(255, 0, 80, 0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
+                <Ionicons name="shield-checkmark" size={38} color="#ff0050" />
+              </View>
+              <Text style={{ color: theme.text, fontSize: 24, fontWeight: '900', letterSpacing: 0.5, textAlign: 'center' }}>
+                Emergency Identity Setup
+              </Text>
+              <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 8, lineHeight: 18, paddingHorizontal: 10 }}>
+                For your safety, the SOS emergency button is unlocked only after registering your verified details and emergency contact.
+              </Text>
+            </View>
+
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ color: theme.text, fontSize: 13, fontWeight: '700', marginBottom: 6 }}>Full Name *</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text, borderColor: theme.backgroundSelected }]}
+                placeholder="Your Full Name"
+                placeholderTextColor={theme.textSecondary}
+                value={onboardingName}
+                onChangeText={setOnboardingName}
+              />
+            </View>
+
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ color: theme.text, fontSize: 13, fontWeight: '700', marginBottom: 6 }}>Phone Number * (Numbers Only)</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text, borderColor: theme.backgroundSelected }]}
+                placeholder="e.g. 9876543210 (10-15 digits)"
+                placeholderTextColor={theme.textSecondary}
+                keyboardType="phone-pad"
+                value={onboardingPhone}
+                onChangeText={text => setOnboardingPhone(text.replace(/[^0-9+]/g, ''))}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ color: theme.text, fontSize: 13, fontWeight: '700', marginBottom: 6 }}>Age * (Numbers Only)</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text, borderColor: theme.backgroundSelected }]}
+                placeholder="e.g. 24"
+                placeholderTextColor={theme.textSecondary}
+                keyboardType="numeric"
+                maxLength={3}
+                value={onboardingAge}
+                onChangeText={text => setOnboardingAge(text.replace(/[^0-9]/g, ''))}
+              />
+            </View>
+
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ color: theme.text, fontSize: 13, fontWeight: '700', marginBottom: 6 }}>Residential Address *</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text, borderColor: theme.backgroundSelected, minHeight: 65 }]}
+                placeholder="Full address (helps police & ambulance reach you)"
+                placeholderTextColor={theme.textSecondary}
+                multiline
+                numberOfLines={2}
+                value={onboardingAddress}
+                onChangeText={setOnboardingAddress}
+              />
+            </View>
+
+            <View style={{ marginBottom: 20 }}>
+              <Text style={{ color: theme.text, fontSize: 13, fontWeight: '700', marginBottom: 6 }}>Workplace / Daily Route (Optional)</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text, borderColor: theme.backgroundSelected }]}
+                placeholder="e.g. Tidel Park / Anna University"
+                placeholderTextColor={theme.textSecondary}
+                value={onboardingWorkplace}
+                onChangeText={setOnboardingWorkplace}
+              />
+            </View>
+
+            <View style={{ padding: 16, borderRadius: 12, backgroundColor: theme.backgroundElement, borderWidth: 1, borderColor: theme.backgroundSelected, marginBottom: 24 }}>
+              <Text style={{ color: '#ff0050', fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>
+                🚨 Primary Trusted Emergency Contact
+              </Text>
+              <Text style={{ color: theme.text, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>Contact Name *</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
+                placeholder="e.g. Mom / Dad / Sister / Friend"
+                placeholderTextColor={theme.textSecondary}
+                value={onboardingContactName}
+                onChangeText={setOnboardingContactName}
+              />
+              <Text style={{ color: theme.text, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>Contact Phone Number * (Numbers Only)</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
+                placeholder="e.g. 9876543210 (10-15 digits)"
+                placeholderTextColor={theme.textSecondary}
+                keyboardType="phone-pad"
+                value={onboardingContactPhone}
+                onChangeText={text => setOnboardingContactPhone(text.replace(/[^0-9+]/g, ''))}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <TouchableOpacity 
+              style={[styles.saveBtn, { marginLeft: 0, paddingVertical: 18, borderRadius: 12, shadowColor: '#ff0050', shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 }]} 
+              onPress={handleSaveOnboardingProfile}
+            >
+              <Text style={[styles.saveBtnText, { fontSize: 16, letterSpacing: 1 }]}>SAVE DETAILS & ACTIVATE SOS</Text>
+            </TouchableOpacity>
+
+            <View style={{ alignItems: 'center', marginTop: 24 }}>
+              <TouchableOpacity onPress={() => router.push('/privacy-policy')}>
+                <Text style={{ color: theme.textSecondary, fontSize: 13, textDecorationLine: 'underline' }}>Privacy Policy & DPDP Data Protection</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Top Header */}
@@ -439,11 +700,11 @@ export default function HomeScreen() {
             
             <TextInput
               style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.backgroundSelected }]}
-              placeholder="Phone Number"
+              placeholder="Phone Number (Digits only)"
               placeholderTextColor={theme.textSecondary}
               keyboardType="phone-pad"
               value={newPhone}
-              onChangeText={setNewPhone}
+              onChangeText={text => setNewPhone(text.replace(/[^0-9+]/g, ''))}
             />
 
             <View style={styles.modalActions}>

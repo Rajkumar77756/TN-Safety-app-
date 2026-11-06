@@ -52,7 +52,8 @@
         "expo-build-properties",
         {
           "android": {
-            "enableProguardInReleaseBuilds": false
+            "enableProguardInReleaseBuilds": false,
+            "ndkVersion": "30.0.14904198"
           }
         }
       ],
